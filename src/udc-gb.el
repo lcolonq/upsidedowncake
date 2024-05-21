@@ -18,12 +18,12 @@
 
 (defun u/gb/assemble-imm8? (x)
   "Return the value for X if X is an 8-bit immediate."
-  (when (and (integerp x) (> x 0) (<= x 255))
+  (when (and (integerp x) (>= x 0) (<= x 255))
     x))
 
 (defun u/gb/assemble-imm16? (x)
   "Return the value for X if X is a 16-bit immediate."
-  (when (and (integerp x) (> x 0) (<= x 65535))
+  (when (and (integerp x) (>= x 0) (<= x 65535))
     x))
 
 (defun u/gb/assemble-r8? (x)
@@ -79,7 +79,7 @@
   "Assemble INS to a sequence of bytes.
 INS is either:
  - an opcode symbol
- - a list of an opcode symbol followed by arguments"
+ - a list of an opcode symbol followed by operands"
   (let* ((op (if (listp ins) (car ins) ins))
          (args (if (listp ins) (cdr ins) nil))
          (a0 (car args))
@@ -102,20 +102,20 @@ INS is either:
        (cond
         ((and a0r16 a1imm16) ;; ld r16, imm16
          (cons (logior #b00000001 (lsh a0r16 4)) (u/split16le a1imm16)))
+        ((and a0imm16 (eq a1 'a)) ;; ld [imm16], a
+         (cons #b11101010 (u/split16le a0imm16)))
+        ((and (eq a0 'a) a1imm16 (eq (caddr args) 'mem)) ;; ld a, [imm16]
+         (cons #b11111010 (u/split16le a1imm16)))
         ((and a0r16mem (eq a1 'a)) ;; ld [r16mem], a
          (list (logior #b00000010 (lsh a0r16mem 4))))
         ((and (eq a0 'a) a1r16mem) ;; ld a, [r16mem]
          (list (logior #b00001010 (lsh a1r16mem 4))))
         ((and a0imm16 (eq a1 'sp)) ;; ld [imm16], sp
          (cons #b00001000 (u/split16le a0imm16)))
-        ((and a0imm16 (eq a1 'sp)) ;; ld r8, imm8
+        ((and a0r8 a1imm8) ;; ld r8, imm8
          (list (logior #b00000110 (lsh a0r8 3)) a1imm8))
         ((and a0r8 a1r8) ;; ld r8, r8
          (list (logior #b01000000 (lsh a0r8 3) a1r8)))
-        ((and a0imm16 (eq a1 'a)) ;; ld [imm16], a
-         (cons #b11101010 (u/split16le a0imm16)))
-        ((and (eq a0 'a) a1imm16) ;; ld a, [imm16]
-         (cons #b11111010 (u/split16le a1imm16)))
         ((and (eq a0 'hl) a1imm8 (and (caddr args) (eq (caddr args) 'sp+))) ;; ld hl, sp + imm8
          (list #b11111000 a1imm8))
         ((and (eq a0 'sp) (eq a1 'hl)) ;; ld sp, hl
@@ -291,17 +291,21 @@ SYMS should be an alist mapping keywords to lists of instructions.
 BASE specifies the base address where the resulting code will be placed."
   (let* ((presymtab (--map (cons (car it) 0) syms)) ;; use a temporary symbol table mapping each sym to 0
          ;; then use it to compute the lengths of each symbol
-         (lengths (--map (cons (car it) (length (u/gb/replace-symbols presymtab (cdr it)))) syms))
+         (lengths (--map (cons (car it) (length (u/gb/link-one (u/gb/replace-symbols presymtab (cdr it))))) syms))
          ;; then use those lengths to compute the real address of each symbol
          (symtab
-          (cdr
-           (--reduce-from
-            (let ((off (+ (cdr it) (car acc))))
-              (cons off (cons (cons (car it) (+ -1 (cdr it) (car acc))) (cdr acc))))
-            (cons base nil)
-            lengths)))
+          (cons
+           (cons (caar lengths) base)
+           (cdr
+            (--reduce-from
+             (let ((off (+ (cddr it) (car acc))))
+               (cons off (cons (cons (caar it) off) (cdr acc))))
+             (cons base nil)
+             (-zip-pair (cdr lengths) lengths)))))
          ;; and finallly replace those addresses in the assembly
          (code (--map (cons (car it) (u/gb/replace-symbols symtab (cdr it))) syms)))
+    (print lengths)
+    (print symtab)
     ;; then assemble and concatenate all of the code!
     (--map (cons (car it) (u/gb/link-one (cdr it))) code)))
 
@@ -358,7 +362,7 @@ The reulting value will be placed in register A."
          (append
           res
           (cl-case (car expr)
-            ('+
+            (+
              '((ld a sp)
                (inc sp)
                (add a b)

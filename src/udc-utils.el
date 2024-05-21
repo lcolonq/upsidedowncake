@@ -39,5 +39,10 @@ Truncate BYTES if it is longer than LEN."
   (let* ((taken (-take len bytes)))
     (append taken (-repeat (- len (length taken)) #xff))))
 
+(defun u/write! (mem addr bytes)
+  "Given a vector MEM and a base ADDR, write BYTES."
+  (--each-indexed bytes
+    (aset mem (+ addr it-index) it)))
+
 (provide 'udc-utils)
 ;;; udc-utils.el ends here
