@@ -44,5 +44,45 @@ Truncate BYTES if it is longer than LEN."
   (--each-indexed bytes
     (aset mem (+ addr it-index) it)))
 
+(defun u/aref-u32-be (a idx)
+  "Read a big-endian 32-bit integer starting at IDX from A."
+  (logior
+   (lsh (aref a idx) 24)
+   (lsh (aref a (+ idx 1)) 16)
+   (lsh (aref a (+ idx 2)) 8)
+   (aref a (+ idx 3))))
+
+(defun u/aref-u16-be (a idx)
+  "Read a big-endian 16-bit integer starting at IDX from A."
+  (logior
+   (lsh (aref a idx) 8)
+   (aref a (+ idx 1))))
+
+(defun u/load-image-ff (path)
+  "Load the Farbfeld image at PATH.
+Return a list of the width, height, and pixels of the image."
+  (when-let*
+      ((data (f-read-bytes path))
+       ((s-prefix? "farbfeld" data))
+       (width (u/aref-u32-be data 8))
+       (height (u/aref-u32-be data 12))
+       (pixels
+        (--map
+         (let ((a (+ 16 (* it 8))))
+           (list
+            (lsh (u/aref-u16-be data a) -8)
+            (lsh (u/aref-u16-be data (+ a 2)) -8)
+            (lsh (u/aref-u16-be data (+ a 4)) -8)))
+         (-iota (* width height)))))
+    (list width height (seq-into pixels 'vector))))
+
+(defun u/pixel-grayscale (p)
+  "Given a list of red, green, and blue bytes P, convert it to one grayscale byte."
+  (round
+   (+
+    (* 0.2989 (car p))
+    (* 0.5870 (cadr p))
+    (* 0.1140 (caddr p)))))
+
 (provide 'udc-utils)
 ;;; udc-utils.el ends here

@@ -9,6 +9,59 @@
 (require 'ht)
 (require 'udc-utils)
 
+(defun u/gb/image-tiles (image)
+  "Given an RGB IMAGE (a list of width, height, and pixels), produce tile data.
+Returns a pair of a list of tiles and a list of tile indices (a tilemap)."
+  (let* ((width (car image))
+         (height (cadr image))
+         (width-tiles (ceiling (/ width 8.0)))
+         (height-tiles (ceiling (/ height 8.0)))
+         (pixels (caddr image))
+         (grayscale (-map #'u/pixel-grayscale pixels))
+         (quantized (seq-into (--map (- 3 (lsh it -6)) grayscale) 'vector)))
+    (cl-flet*
+        ((getpixel (x y)
+           (if (or (< x 0) (>= x width) (< y 0) (>= y height))
+               0
+             (aref quantized (+ x (* y width)))))
+         (getrow (x y)
+           (let ((pixels (--map (getpixel (+ x it) y) (-iota 8))))
+             (list
+              (apply #'logior (--map-indexed (lsh (logand #b1 it) (- 7 it-index)) pixels))
+              (apply #'logior (--map-indexed (lsh (logand #b1 (lsh it -1)) (- 7 it-index)) pixels)))))
+         (gettile (tx ty)
+           (let ((x (* tx 8))
+                 (y (* ty 8)))
+             (-flatten
+              (--map
+               (getrow x (+ y it))
+               (-iota 8))))))
+      (let* ((tiles
+             (apply
+              #'-concat
+              (-map
+               (lambda (y)
+                 (-map
+                  (lambda (x)
+                    (cons (cons x y) (gettile x y)))
+                  (-iota width-tiles)))
+               (-iota height-tiles))))
+             (unique-tiles (-uniq (-map #'cdr tiles)))
+             (tile-indices (--map-indexed (cons it it-index) unique-tiles))
+             (coord-indices (--map (cons (car it) (alist-get (cdr it) tile-indices nil nil #'equal)) tiles))
+             (tilemap
+              (-map
+               (lambda (y)
+                 (-map
+                  (lambda (x)
+                    (alist-get (cons x y) coord-indices 0 nil #'equal))
+                  (-iota 32)))
+               (-iota 32)))
+             )
+        (cons
+         (-flatten unique-tiles)
+         (-flatten tilemap))))))
+
 (defun u/gb/replace-symbols (symtab asm)
   "Replace keywords in ASM with values from the alist SYMTAB."
   (-map
