@@ -21,6 +21,27 @@ BODY is passed directly to `cl-defstruct'."
   "Lookup SLOT in the struct S."
   `(eieio-oref ,s (quote ,slot)))
 
+(u/defstruct
+ u/symtab-entry
+ addr
+ code)
+
+(defun u/symtab-add! (symtab name entry)
+  "Add a mapping from NAME to ENTRY in SYMTAB.
+Ensure that the address of ENTRY doesn't fall within any existing regions.
+Note that this doesn't exhaustively prevent overlaps.
+\(Since we don't necessarily know the length of this symbol)."
+  (let* ((addr (u/symtab-entry-addr entry))
+         (overlap
+          (--first
+           (and
+            (>= addr (u/symtab-entry-addr (cdr it)))
+            (< addr (+ (u/symtab-entry-addr (cdr it)) (length (u/symtab-entry-code (cdr it))))))
+           (ht->alist symtab))))
+    (if overlap
+        (error "Failed to add symbol %s - address within body of %s" name (car overlap))
+      (ht-set! symtab name entry))))
+
 (defun u/split16be (w16)
   "Split the 16-bit W16 into a big-endian list of 8-bit integers."
   (list

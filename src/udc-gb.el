@@ -9,16 +9,52 @@
 (require 'ht)
 (require 'udc-utils)
 
-(defun u/gb/image-tiles (image)
+;;;; Constants
+;; registers specified as offsets from 0xff00 (for use with ldh)
+(defconst u/gb/reg-input #x00)
+(defconst u/gb/reg-sound-channel-1-sweep #x10)
+(defconst u/gb/reg-sound-channel-1-dutycycle #x11)
+(defconst u/gb/reg-sound-channel-1-envelope #x12)
+(defconst u/gb/reg-sound-channel-1-periodlo #x13)
+(defconst u/gb/reg-sound-channel-1-periodhi #x14)
+(defconst u/gb/reg-interrupt-flag #x0f)
+(defconst u/gb/reg-sound #x26)
+(defconst u/gb/reg-sound-volume #x24)
+(defconst u/gb/reg-lcdc #x40)
+(defconst u/gb/reg-ly #x44)
+(defconst u/gb/reg-bgp #x47)
+(defconst u/gb/reg-interrupt #xff)
+
+;;;; Utility functions
+(defun u/gb/image-quantize-guess (rgb)
+  "Quantize RGB in a somewhat reasonable way.
+For images that weren't made for the Game Boy."
+  (let ((gs (u/pixel-grayscale rgb)))
+    (- 3 (lsh gs -6))))
+
+(defun u/gb/image-quantize-aseprite (rgb)
+  "Quantize RGB based on Aseprite's Game Boy palette.
+For images that weren't made for the Game Boy."
+  (let ((r (car rgb))
+        (g (cadr rgb))
+        (b (caddr rgb)))
+    (cond
+     ((and (= r #x9b) (= g #xbc) (= b #x0f)) 0)
+     ((and (= r #x8b) (= g #xac) (= b #x0f)) 1)
+     ((and (= r #x30) (= g #x62) (= b #x30)) 2)
+     ((and (= r #x0f) (= g #x38) (= b #x0f)) 3)
+     (t (error "Invalid color: %s" rgb)))))
+
+(defun u/gb/image-tiles (quantize image)
   "Given an RGB IMAGE (a list of width, height, and pixels), produce tile data.
+Calls QUANTIZE to convert the RGB color lists to a number from 0 to 3.
 Returns a pair of a list of tiles and a list of tile indices (a tilemap)."
   (let* ((width (car image))
          (height (cadr image))
          (width-tiles (ceiling (/ width 8.0)))
          (height-tiles (ceiling (/ height 8.0)))
          (pixels (caddr image))
-         (grayscale (-map #'u/pixel-grayscale pixels))
-         (quantized (seq-into (--map (- 3 (lsh it -6)) grayscale) 'vector)))
+         (quantized (seq-into (-map quantize pixels) 'vector)))
     (cl-flet*
         ((getpixel (x y)
            (if (or (< x 0) (>= x width) (< y 0) (>= y height))
@@ -63,16 +99,23 @@ Returns a pair of a list of tiles and a list of tile indices (a tilemap)."
          (-flatten tilemap))))))
 
 (defun u/gb/replace-symbols (symtab asm)
-  "Replace keywords in ASM with values from the alist SYMTAB."
+  "Replace keywords in ASM with values from SYMTAB."
   (-map
    (lambda (ins)
-     (--map (if (keywordp it) (alist-get it symtab) it) ins))
+     (--map
+      (if (keywordp it)
+          (let ((entry (ht-get symtab it 0)))
+            (if (u/symtab-entry-p entry) (u/symtab-entry-addr entry) entry))
+        it)
+      ins))
    asm))
 
 (defun u/gb/assemble-imm8? (x)
   "Return the value for X if X is an 8-bit immediate."
-  (when (and (integerp x) (>= x 0) (<= x 255))
-    x))
+  (cond
+   ((and (integerp x) (>= x 0) (<= x 255)) x)
+   ((and (integerp x) (>= x -128) (< x 0)) (+ 255 x))
+   (t nil)))
 
 (defun u/gb/assemble-imm16? (x)
   "Return the value for X if X is a 16-bit immediate."
@@ -272,8 +315,8 @@ INS is either:
        (cond
         (a0imm8 ;; jr imm8
          (list #b00011000 a0imm8))
-        (a0cond ;; jr cond, imm8
-         (list (logior #b00100000 (lsh a0cond 3)) a0imm8))
+        ((and a0cond a1imm8) ;; jr cond, imm8
+         (list (logior #b00100000 (lsh a0cond 3)) a1imm8))
         ))
       (ret
        (cond
@@ -333,20 +376,39 @@ INS is either:
       (set ;; set b3, r8
        (when a1r8 (list #xcb (logior #b11000000 (lsh (logand a0 #b111) 3) a1r8)))))))
 
-(defun u/gb/link-one (code)
+(defun u/gb/assemble (code)
   "Link CODE into a sequence of bytes.
 CODE should be a list of instructions."
-  (-flatten (-map #'u/gb/assemble-ins code)))
+  (-flatten
+   (--map
+    (let ((res (u/gb/assemble-ins it)))
+      (if (and res (-all? #'integerp res))
+          res
+        (error "Failed to assemble instruction: %s" it)))
+    code)))
 
-(defun u/gb/link (base syms)
-  "Link SYMS into an alist mapping keywords to sequences of bytes.
+(defun u/gb/reserve (bytes)
+  "Return a list of BYTES NOP instructions.
+This is useful when reserving space for variables."
+  (-repeat bytes 'nop))
+
+(defun u/gb/assembly-length (asm)
+  "Return the length in bytes of ASM."
+  (length (u/gb/assemble (u/gb/replace-symbols (ht-create) asm))))
+
+(defun u/gb/link (symtab base syms)
+  "Add SYMS to SYMTAB.
+SYMTAB is an existing hash table from keywords to symbol table entries.
 SYMS should be an alist mapping keywords to lists of instructions.
 BASE specifies the base address where the resulting code will be placed."
-  (let* ((presymtab (--map (cons (car it) 0) syms)) ;; use a temporary symbol table mapping each sym to 0
-         ;; then use it to compute the lengths of each symbol
-         (lengths (--map (cons (car it) (length (u/gb/link-one (u/gb/replace-symbols presymtab (cdr it))))) syms))
+  (let* ((lengths ;; compute the lengths of each symbol
+          (--map
+           (cons
+            (car it)
+            (u/gb/assembly-length (cdr it)))
+           syms))
          ;; then use those lengths to compute the real address of each symbol
-         (symtab
+         (addrs
           (cons
            (cons (caar lengths) base)
            (cdr
@@ -354,13 +416,17 @@ BASE specifies the base address where the resulting code will be placed."
              (let ((off (+ (cddr it) (car acc))))
                (cons off (cons (cons (caar it) off) (cdr acc))))
              (cons base nil)
-             (-zip-pair (cdr lengths) lengths)))))
-         ;; and finallly replace those addresses in the assembly
-         (code (--map (cons (car it) (u/gb/replace-symbols symtab (cdr it))) syms)))
-    (print lengths)
-    (print symtab)
-    ;; then assemble and concatenate all of the code!
-    (--map (cons (car it) (u/gb/link-one (cdr it))) code)))
+             (-zip-pair (cdr lengths) lengths))))))
+    (--each addrs ;; add entries only containing the addresses to symtab
+      (u/symtab-add! ;; (we only need lengths to replace symbols in the code)
+       symtab
+       (car it)
+       (u/make-symtab-entry :addr (cdr it))))
+    (--each syms ;; then add all of the code
+      (when-let ((entry (ht-get symtab (car it))))
+        (setf
+         (u/symtab-entry-code entry)
+         (u/gb/assemble (u/gb/replace-symbols symtab (cdr it))))))))
 
 (defun u/gb/prepend-header (initial rom)
   "Prepend the 0x150-byte header to ROM.
@@ -369,7 +435,7 @@ Place 0x100 bytes of INITIAL at the front."
    (u/pad-to #x100 initial) ;; initial bytes
    (u/pad-to
     4
-    (u/gb/link-one ;; entry point - jump to 0x150
+    (u/gb/assemble ;; entry point - jump to 0x150
      '(nop
        (jp #x150))))
    (list ;; nintendo logo
