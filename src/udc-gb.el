@@ -7,6 +7,7 @@
 (require 'f)
 (require 'dash)
 (require 'ht)
+(require 'muzak)
 (require 'udc-utils)
 
 ;;;; Constants
@@ -26,6 +27,23 @@
 (defconst u/gb/reg-interrupt #xff)
 
 ;;;; Utility functions
+(defun u/gb/freq-to-period (freq)
+  "Convert FREQ to an 11-bit period value."
+  (if (= freq 0)
+      0
+    (let ((res (round (- 2048.0 (/ 131072.0 freq)))))
+      (if (>= res 2048)
+          (error "Frequency %s is too high" freq)
+        res))))
+
+(defun u/gb/music-from-muzak (inp)
+  "Turn the Muzak string INP into a list of bytes appropriate for playbnack."
+  (let* ((parsed (muzak/parse inp))
+         (track (car parsed))
+         (freqs (-map #'muzak/note-to-freq track))
+         (periods (-map #'u/gb/freq-to-period freqs)))
+    (-flatten (-map #'u/split16le periods))))
+
 (defun u/gb/image-quantize-guess (rgb)
   "Quantize RGB in a somewhat reasonable way.
 For images that weren't made for the Game Boy."

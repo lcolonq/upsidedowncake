@@ -33,9 +33,17 @@
   (+ it (/ (length g/font-tiles) 16))
   (cdr g/battle-tiledata)))
 
+(defconst g/music
+  (u/gb/music-from-muzak
+   ;; "DEFGA/dcA/D/AGFEDEFGA/GFEDEFEDCE DEFGA/dcA/D/AGFEDEFGA/GFE/F/G/A"
+   "F/E/D/E/F/G//A//DDD/////C//////F/E/D/E/F/G//G//G///F///E"
+   ))
+(defconst g/music-addr #x6000)
+(u/write! g/mem g/music-addr g/music)
+
 ;;;; Utility functions
-(defun g/when (cond body)
-  "Return assembly to only run BODY if COND is set."
+(defun g/unless (cond body)
+  "Return assembly to only run BODY if COND is not set."
   `((jr ,cond ,(u/gb/assembly-length body))
     ,@body))
 
@@ -86,9 +94,14 @@
 
 (defun g/trigger-1 ()
   "Trigger channel 1."
-  `((ld a #b10000000) (ldh ,u/gb/reg-sound-channel-1-periodhi a)))
+  `((ld a #b11000000) (ldh ,u/gb/reg-sound-channel-1-periodhi a)))
 
-(defun g/play-note-1 (val)
+(defun g/play-note-1 ()
+  "Play the note in BC on channel 1."
+  `((ld a c) (ldh ,u/gb/reg-sound-channel-1-periodlo a)
+    (ld a b) (and a #b10000111) (ldh ,u/gb/reg-sound-channel-1-periodhi a)))
+
+(defun g/test-note-1 (val)
   "Play VAL on channel 1."
   `((ld a ,(logand val #xff)) (ldh ,u/gb/reg-sound-channel-1-periodlo a)
     (ld a ,(logand (ash val -8) #b111)) (ldh ,u/gb/reg-sound-channel-1-periodhi a)))
@@ -97,7 +110,9 @@
 (u/gb/link
  g/symtab
  #xc000 ;; variables in RAM
- `((:tick ,(u/gb/reserve 1))
+ `((:audio-tick ,(u/gb/reserve 1))
+   (:audio-cursor ,(u/gb/reserve 1))
+   (:audio-cursor-hi ,(u/gb/reserve 1))
    (:cur-keys ,(u/gb/reserve 1))
    (:new-keys ,(u/gb/reserve 1))))
 
@@ -146,6 +161,13 @@
     (ld a b)
     (ld :cur-keys a)
     (ret))
+   (:reset-music ;; function
+    (ld hl ,g/music-addr)
+    (ld a l)
+    (ld :audio-cursor a)
+    (ld a h)
+    (ld :audio-cursor-hi a)
+    (ret))
 
    (:initialize-vram
     ,@(g/memcpy g/font-addr #x9000 (+ (length g/font-tiles) (length (car g/battle-tiledata))))
@@ -160,24 +182,44 @@
     (ld a #b10000000) (ldh ,u/gb/reg-sound a) ;; enable sound
     (ld a #b01110111) (ldh ,u/gb/reg-sound-volume a) ;; max volume
     (ld a #b00000000) (ldh ,u/gb/reg-sound-channel-1-sweep a) ;; no period sweep
-    (ld a #b00000000) (ldh ,u/gb/reg-sound-channel-1-dutycycle a) ;; duty cycle
+    (ld a #b00000111) (ldh ,u/gb/reg-sound-channel-1-dutycycle a) ;; duty cycle
     (ld a #b11111000) (ldh ,u/gb/reg-sound-channel-1-envelope a) ;; envelope
     ,@(g/trigger-1) ;; start playing channel 1
     )
 
+   (:initialize-variables
+    (ld a 0) (ld :audio-tick a)
+    (call :reset-music))
+
    (:main-loop
     (halt) (nop) ;; wait for vblank and run interrupt
     ;; (call :update-keys)
-    ,@(g/increment-var :tick)
-    (cp a 60)
-    ,@(g/when
-       'nz
-       `(,@(g/play-note-1 #x500)
-         (xor a a) (ld :tick a)
-         ,@(g/increment-var :cur-keys)
-         ,@(g/write-digit 0 0)))
+    ,@(g/increment-var :audio-tick)
+    (cp a 12)
+    ,@(let* ((end (+ g/music-addr (length g/music)))
+             (endbytes (u/split16le end)))
+       (g/unless
+        'nz
+        `((xor a a) (ld :audio-tick a)
+          (ld hl :audio-cursor)
+          (ld a *hl+) (ld c a)
+          (ld a *hl+) (ld b a)
+          (ld h b) (ld l c)
+          (ld a *hl+) (ld c a)
+          (ld a *hl+) (ld b a)
+          (ld a l) (ld :audio-cursor a)
+          (ld a h) (ld :audio-cursor-hi a)
+          (ld a b)
+          (or a c)
+          ,@(g/unless
+             'z
+             (g/play-note-1))
+          (ld a l) (xor a ,(car endbytes)) (ld b a)
+          (ld a h) (xor a ,(cadr endbytes))
+          (or a b)
+          ,@(g/unless 'nz '((call :reset-music)))
+          )))
     (jp :main-loop))))
-
 
 (u/gb/link
  g/symtab-interrupts
