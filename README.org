@@ -1,0 +1,37 @@
+#+title: compiler upside-down cake
+Or, a fun little experiment in code generation.
+
+* what is this even
+It's an Emacs Lisp program that generates a Game Boy game!
+Well, a "game" - it's not very fun.
+But it has many game-like attributes! Graphics! Music! User interaction! Sound effects!
+It's also an entry for [[https://itch.io/jam/spring-lisp-game-jam-2024][the Spring Lisp Game Jam 2024]].
+* how do I build the game
+#+begin_src emacs-lisp
+emacs --script game.el
+#+end_src
+(Or use ~eval-buffer~ from within Emacs.)
+This will create a file called ~game.gb~ in the current directory.
+You can run this file with any Game Boy emulator, or presumably on hardware but I didn't test it yet.
+* how is this different from other game boy homebrew?
+It's made totally from scratch - ~game.el~ generates the ROM without relying on *any* external tools, including e.g. an assembler.
+There's an Emacs Lisp implementation of a GBZ80 assembler in ~src/udc-gb.el~, along with a bunch of other convenient functions.
+* what is the point of this
+Lately I've been thinking about compilers in a slightly strange way.
+The source code given as input to something like a C compiler can be separated into information that the compiler uses at compile-time (e.g. to lay out structs, etc.) and "data" that is converted to some lower-level representation.
+In a way, C is a scripting language for a C compiler - in addition to describing the behavior of the final executable code, it instructs the compiler what to do.
+What if instead of using whatever limited tools a language like C (or Rust, or Zig, etc.) provides for this kind of compile-time scripting, we had the full power of another language?
+
+What if instead of relying on whatever passes the compiler has built-in, we could call those passes as functions and save intermediate representations in variables?
+The idea is to build something that is to a traditional compiler what shaders are to a fixed-function graphics pipeline.
+Instead of having a single monolithic compiler, the compiler would be a collection of utilities to do things like translation of expressions to IR, optimization, register assignment, etc.
+The source code for your program would then be an implementation of a bespoke compiler (using those utilities to make it easy peasy) that generates exactly the build artifacts you want.
+
+If this all sounds a little underbaked that's because it is.
+I'm interested in exploring these ideas, though!
+I didn't get quite as far as I liked with this project - for example, I would up writing a lot of assembly by hand instead of building some smarter thing to translate expressions.
+But overall I found the development experience quite pleasant despite the rudimentary tools I made, and I intend to try it again in the future (maybe on another architecture).
+* that is crazy how can i avoid seeing more
+I stream twice weekly at [[https://twitch.tv/LCOLONQ]], if you're interesting in watching me mess around with stuff like this in real time.
+I did a lot of development on this project live!
+We also talk a whole lot about video games and computers and books and all sorts of things.
