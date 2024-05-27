@@ -1,0 +1,3 @@
+[submodule "deps/muzak"]
+	path = deps/muzak
+	url = https://codeberg.org/bezelea/muzak

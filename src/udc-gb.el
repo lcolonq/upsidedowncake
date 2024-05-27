@@ -7,8 +7,10 @@
 (require 'f)
 (require 'dash)
 (require 'ht)
-(require 'muzak)
 (require 'udc-utils)
+
+(add-to-list 'load-path (f-canonical "../deps/muzak"))
+(require 'muzak nil t)
 
 ;;;; Constants
 ;; registers specified as offsets from 0xff00 (for use with ldh)
@@ -18,6 +20,10 @@
 (defconst u/gb/reg-sound-channel-1-envelope #x12)
 (defconst u/gb/reg-sound-channel-1-periodlo #x13)
 (defconst u/gb/reg-sound-channel-1-periodhi #x14)
+(defconst u/gb/reg-sound-channel-2-dutycycle #x16)
+(defconst u/gb/reg-sound-channel-2-envelope #x17)
+(defconst u/gb/reg-sound-channel-2-periodlo #x18)
+(defconst u/gb/reg-sound-channel-2-periodhi #x19)
 (defconst u/gb/reg-interrupt-flag #x0f)
 (defconst u/gb/reg-sound #x26)
 (defconst u/gb/reg-sound-volume #x24)
@@ -118,15 +124,17 @@ Returns a pair of a list of tiles and a list of tile indices (a tilemap)."
 
 (defun u/gb/replace-symbols (symtab asm)
   "Replace keywords in ASM with values from SYMTAB."
-  (-map
-   (lambda (ins)
-     (--map
-      (if (keywordp it)
-          (let ((entry (ht-get symtab it 0)))
-            (if (u/symtab-entry-p entry) (u/symtab-entry-addr entry) entry))
-        it)
-      ins))
-   asm))
+  (if (listp asm)
+      (-map
+       (lambda (ins)
+         (--map
+          (if (keywordp it)
+              (let ((entry (ht-get symtab it 0)))
+                (if (u/symtab-entry-p entry) (u/symtab-entry-addr entry) entry))
+            it)
+          ins))
+       asm)
+    asm))
 
 (defun u/gb/assemble-imm8? (x)
   "Return the value for X if X is an 8-bit immediate."
@@ -397,13 +405,17 @@ INS is either:
 (defun u/gb/assemble (code)
   "Link CODE into a sequence of bytes.
 CODE should be a list of instructions."
-  (-flatten
-   (--map
-    (let ((res (u/gb/assemble-ins it)))
-      (if (and res (-all? #'integerp res))
-          res
-        (error "Failed to assemble instruction: %s" it)))
-    code)))
+  (cond
+   ((listp code)
+    (-flatten
+     (--map
+      (let ((res (u/gb/assemble-ins it)))
+        (if (and res (-all? #'integerp res))
+            res
+          (error "Failed to assemble instruction: %s" it)))
+      code)))
+   ((stringp code) (seq-into code 'list))
+   (t (error "Attempted to assemble invalide code: %s" code))))
 
 (defun u/gb/reserve (bytes)
   "Return a list of BYTES NOP instructions.
@@ -412,7 +424,10 @@ This is useful when reserving space for variables."
 
 (defun u/gb/assembly-length (asm)
   "Return the length in bytes of ASM."
-  (length (u/gb/assemble (u/gb/replace-symbols (ht-create) asm))))
+  (cond
+   ((listp asm) (length (u/gb/assemble (u/gb/replace-symbols (ht-create) asm))))
+   ((stringp asm) (length (seq-into asm 'list)))
+   (t (error "Tried to compute the length of invalid symbol data: %s" asm))))
 
 (defun u/gb/link (symtab base syms)
   "Add SYMS to SYMTAB.
