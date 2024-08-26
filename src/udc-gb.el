@@ -484,7 +484,8 @@ Place 0x100 bytes of INITIAL at the front."
    (list #x00) ;; destination code
    (list #x00) ;; old licensee code
    (list #x00) ;; version number
-   (list #x00) ;; header checksum
+   ;; (list #x00) ;; header checksum
+   (list #xe7) ;; header checksum
    (u/split16be #x0000) ;; global checksum
    rom))
 
