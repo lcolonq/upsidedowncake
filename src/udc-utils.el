@@ -54,6 +54,14 @@ Note that this doesn't exhaustively prevent overlaps.
    (logand #xff w16)
    (logand #xff (lsh w16 -8))))
 
+(defun u/split32le (w32)
+  "Split the 32-bit W32 into a little-endian list of 8-bit integers."
+  (list
+   (logand #xff w32)
+   (logand #xff (lsh w32 -8))
+   (logand #xff (lsh w32 -16))
+   (logand #xff (lsh w32 -24))))
+
 (defun u/pad-to (len bytes)
   "Pad BYTES to LEN with 0xFF.
 Truncate BYTES if it is longer than LEN."
