@@ -5,7 +5,7 @@
 (require 'dash)
 (require 'ht)
 (require 'f)
-(add-to-list 'load-path (f-canonical "."))
+(add-to-list 'load-path (f-canonical "../.."))
 (require 'udc)
 
 ;;;; Code generation state

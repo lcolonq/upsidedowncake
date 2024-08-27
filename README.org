@@ -1,6 +1,8 @@
 #+title: compiler upside-down cake
 Or, a fun little experiment in code generation.
 
+[[./screenshot.png]]
+
 * what is this even
 It's an Emacs Lisp program that generates a Game Boy game!
 Well, a "game" - it's not very fun.
@@ -8,6 +10,7 @@ But it has many game-like attributes! Graphics! Music! User interaction! Sound e
 It's also an entry for [[https://itch.io/jam/spring-lisp-game-jam-2024][the Spring Lisp Game Jam 2024]].
 * how do I build the game
 #+begin_src emacs-lisp
+cd games/gbgizmo/
 emacs --script game.el
 #+end_src
 (Or use ~eval-buffer~ from within Emacs.)

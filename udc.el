@@ -8,6 +8,7 @@
 (add-to-list 'load-path (f-canonical "./src/"))
 (require 'udc-utils)
 (require 'udc-gb)
+(require 'udc-gba)
 
 (provide 'udc)
 ;;; udc.el ends here
