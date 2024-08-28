@@ -22,25 +22,57 @@ BODY is passed directly to `cl-defstruct'."
   `(eieio-oref ,s (quote ,slot)))
 
 (u/defstruct
- u/symtab-entry
- addr
- code)
+ u/symtab
+ (symbols (ht-create)) ;; hash table mapping symbols to entries
+ (sections (ht-create)) ;; hash table mapping section name symbols to the current start address
+ )
 
-(defun u/symtab-add! (symtab name entry)
-  "Add a mapping from NAME to ENTRY in SYMTAB.
-Ensure that the address of ENTRY doesn't fall within any existing regions.
-Note that this doesn't exhaustively prevent overlaps.
-\(Since we don't necessarily know the length of this symbol)."
-  (let* ((addr (u/symtab-entry-addr entry))
-         (overlap
-          (--first
-           (and
-            (>= addr (u/symtab-entry-addr (cdr it)))
-            (< addr (+ (u/symtab-entry-addr (cdr it)) (length (u/symtab-entry-code (cdr it))))))
-           (ht->alist symtab))))
-    (if overlap
-        (error "Failed to add symbol %s - address within body of %s" name (car overlap))
-      (ht-set! symtab name entry))))
+(u/defstruct
+ u/symtab-entry
+ addr ;; location of this symbol (in machine address space)
+ (type 'code) ;; code or bytes or var or const
+ data ;; list of instructions if code, or a list of bytes if data, or a size if var, or a function from symbol table and address to list of bytes if const
+ )
+
+(defun u/symtab-entry-length (symtab addr entry)
+  "Return the length in bytes of ENTRY at ADDR in SYMTAB."
+  (let ((data (u/symtab-entry-data entry)))
+    (cl-case (u/symtab-entry-type entry)
+      (code (* 4 (length data)))
+      (bytes (length data))
+      (var data)
+      (const (length (funcall data symtab addr)))
+      (t (error "Unknown symbol table entry type: %s" (u/symtab-entry-type entry))))))
+
+(defun u/symtab-add-section! (symtab name addr)
+  "Add a section NAME starting at ADDR in SYMTAB."
+  (ht-set! (u/symtab-sections symtab) name addr))
+
+(defun u/symtab-add-entry! (symtab name entry)
+  "Add a mapping from NAME to ENTRY in SYMTAB."
+  (ht-set! (u/symtab-symbols symtab) name entry))
+
+(defun u/symtab-add! (symtab section name type data)
+  "Add a mapping from NAME to DATA of TYPE in SECTION of SYMTAB."
+  (let* ((section-offset (ht-get (u/symtab-sections symtab) section))
+         (entry (u/make-symtab-entry :addr section-offset :type type :data data)))
+    (unless section-offset
+      (error "Could not find section %s when adding symbol %s" section name))
+    (u/symtab-add-entry! symtab name entry)
+    (ht-set!
+     (u/symtab-sections symtab) section
+     (+ section-offset (u/symtab-entry-length symtab section-offset entry)))))
+
+(defun u/symtab-lookup (symtab name)
+  "Return the address of NAME in SYMTAB."
+  (ht-get (u/symtab-symbols symtab) name))
+
+(defun u/symtab-lookup-relative (symtab base name)
+  "Return the word offset of NAME in SYMTAB given the word offset BASE."
+  (when-let*
+      ((ent (u/symtab-lookup symtab name))
+       (addrword (/ (u/symtab-entry-addr ent) 4)))
+    (- addrword base 2)))
 
 (defun u/split16be (w16)
   "Split the 16-bit W16 into a big-endian list of 8-bit integers."
@@ -63,10 +95,10 @@ Note that this doesn't exhaustively prevent overlaps.
    (logand #xff (lsh w32 -24))))
 
 (defun u/pad-to (len bytes)
-  "Pad BYTES to LEN with 0xFF.
+  "Pad BYTES to LEN with 0xde.
 Truncate BYTES if it is longer than LEN."
   (let* ((taken (-take len bytes)))
-    (append taken (-repeat (- len (length taken)) #xff))))
+    (append taken (-repeat (- len (length taken)) #xde))))
 
 (defun u/write! (mem addr bytes)
   "Given a vector MEM and a base ADDR, write BYTES."

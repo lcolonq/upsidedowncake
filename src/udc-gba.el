@@ -98,6 +98,7 @@
        (logior
         (lsh
          (cond
+          ((not shift) 0)
           ((integerp shift) (logand #xf shift))
           (t (error "Invalid immediate rotation: %s" shift)))
          8)
@@ -288,65 +289,77 @@ HALFWORD, and OFFSET2."
        rcond " "
        (s-join ", " (-map #'u/gba/render-arg args)))))))
 
-(defun u/gba/assemble-ins (ins)
+(defun u/gba/assemble-ins (ins &optional check)
   "Assemble INS to a sequence of bytes.
+If CHECK is non-nil, check against system assembler.
 INS is either:
  - an opcode symbol
  - a list of an opcode symbol followed by operands"
-  (let* ((op (if (listp ins) (car ins) ins))
-         (opbase (if (listp ins) ins nil))
-         (set-cond (-contains? opbase 's))
-         (cond (or (car (--filter (-contains? u/gba/conds it) opbase)) 'al))
-         (args (--filter (not (-contains? (list cond 's) it)) (cdr opbase)))
-         (d (car args))
-         (dimm (u/gba/assemble-imm d))
-         (a0 (cadr args))
-         (a1 (caddr args))
-         (a2 (cadddr args))
-         (a2imm (u/gba/assemble-imm a2))
-         (a3 (nth 4 args))
-         )
-    (cl-case op
-      (adc (u/gba/assemble-ins-dataprocessing cond 'adc set-cond a0 d a1 a2))
-      (add (u/gba/assemble-ins-dataprocessing cond 'add set-cond a0 d a1 a2))
-      (and (u/gba/assemble-ins-dataprocessing cond 'and set-cond a0 d a1 a2))
-      (b (u/gba/assemble-ins-branch cond nil dimm))
-      (bic (u/gba/assemble-ins-dataprocessing cond 'bic set-cond a0 d a1 a2))
-      (bl (u/gba/assemble-ins-branch cond t dimm))
-      (bx (u/gba/assemble-ins-branchexchange cond d))
-      (cdp (error "Unsupported instruction: %s" ins))
-      (cmn (u/gba/assemble-ins-dataprocessing cond 'cmn set-cond a0 d a1 a2))
-      (cmp (u/gba/assemble-ins-dataprocessing cond 'cmp set-cond a0 d a1 a2))
-      (eor (u/gba/assemble-ins-dataprocessing cond 'eor set-cond a0 d a1 a2))
-      (ldc (error "Unsupported instruction: %s" ins))
-      (ldm (u/gba/assemble-ins-bdt cond (-contains? opbase 'pre) (-contains? opbase 'up) (-contains? opbase 'psr) (-contains? opbase 'wb) t a0 a1))
-      (ldr
-       (u/gba/assemble-ins-sdt
-        cond (not a2imm) (-contains? opbase 'pre) (-contains? opbase 'up) (-contains? opbase 'byte) (-contains? opbase 'wb) t a0 a1
-        (or a2imm (logior (lsh a3 4) (u/gba/assemble-reg a2)))))
-      (mcr (error "Unsupported instruction: %s" ins))
-      (mla (u/gba/assemble-ins-multiply cond t set-cond d a2 a1 a0))
-      (mov (u/gba/assemble-ins-dataprocessing cond 'mov set-cond a0 d a1 a2))
-      (mrc (error "Unsupported instruction: %s" ins))
-      (mrs (error "Unsupported instruction: %s" ins))
-      (msr (error "Unsupported instruction: %s" ins))
-      (mul (u/gba/assemble-ins-multiply cond nil set-cond d nil a1 a0))
-      (mvn (u/gba/assemble-ins-dataprocessing cond 'mvn set-cond a0 d a1 a2))
-      (orr (u/gba/assemble-ins-dataprocessing cond 'orr set-cond a0 d a1 a2))
-      (rsb (u/gba/assemble-ins-dataprocessing cond 'rsb set-cond a0 d a1 a2))
-      (rsc (u/gba/assemble-ins-dataprocessing cond 'rsc set-cond a0 d a1 a2))
-      (sbc (u/gba/assemble-ins-dataprocessing cond 'sbc set-cond a0 d a1 a2))
-      (stc (error "Unsupported instruction: %s" ins))
-      (stm (u/gba/assemble-ins-bdt cond (-contains? opbase 'pre) (-contains? opbase 'up) (-contains? opbase 'psr) (-contains? opbase 'wb) nil a0 a1))
-      (str
-       (u/gba/assemble-ins-sdt
-        cond (not a2imm) (-contains? opbase 'pre) (-contains? opbase 'up) (-contains? opbase 'byte) (-contains? opbase 'wb) nil a0 a1
-        (or a2imm (logior (lsh (nth 3 args) 4) (u/gba/assemble-reg a2)))))
-      (sub (u/gba/assemble-ins-dataprocessing cond 'sub set-cond a0 d a1 a2))
-      (swi (u/gba/assemble-ins-interrupt cond d))
-      (swp (u/gba/assemble-ins-singledataswap cond (-contains? opbase 'swap) a0 a1 a2))
-      (teq (u/gba/assemble-ins-dataprocessing cond 'teq set-cond a0 d a1 a2))
-      (tst (u/gba/assemble-ins-dataprocessing cond 'tst set-cond a0 d a1 a2)))))
+  (let*
+      ((op (if (listp ins) (car ins) ins))
+       (opbase (if (listp ins) ins nil))
+       (set-cond (-contains? opbase 's))
+       (cond (or (car (--filter (-contains? u/gba/conds it) opbase)) 'al))
+       (args (--filter (not (-contains? (list cond 's) it)) (cdr opbase)))
+       (d (car args))
+       (dimm (u/gba/assemble-imm d))
+       (a0 (cadr args))
+       (a1 (caddr args))
+       (a2 (cadddr args))
+       (a2imm (u/gba/assemble-imm a2))
+       (a3 (nth 4 args))
+       (res
+        (cl-case op
+          (adc (u/gba/assemble-ins-dataprocessing cond 'adc set-cond a0 d a1 a2))
+          (add (u/gba/assemble-ins-dataprocessing cond 'add set-cond a0 d a1 a2))
+          (and (u/gba/assemble-ins-dataprocessing cond 'and set-cond a0 d a1 a2))
+          (b (u/gba/assemble-ins-branch cond nil dimm))
+          (bic (u/gba/assemble-ins-dataprocessing cond 'bic set-cond a0 d a1 a2))
+          (bl (u/gba/assemble-ins-branch cond t dimm))
+          (bx (u/gba/assemble-ins-branchexchange cond d))
+          (cdp (error "Unsupported instruction: %s" ins))
+          (cmn (u/gba/assemble-ins-dataprocessing cond 'cmn set-cond a0 d a1 a2))
+          (cmp (u/gba/assemble-ins-dataprocessing cond 'cmp set-cond a0 d a1 a2))
+          (eor (u/gba/assemble-ins-dataprocessing cond 'eor set-cond a0 d a1 a2))
+          (ldc (error "Unsupported instruction: %s" ins))
+          (ldm (u/gba/assemble-ins-bdt cond (-contains? opbase 'pre) (-contains? opbase 'up) (-contains? opbase 'psr) (-contains? opbase 'wb) t a0 a1))
+          (ldr
+           (u/gba/assemble-ins-sdt
+            cond (not a2imm) (-contains? opbase 'pre) (-contains? opbase 'up) (-contains? opbase 'byte) (-contains? opbase 'wb) t a0 a1
+            (or a2imm (logior (lsh a3 4) (u/gba/assemble-reg a2)))))
+          (mcr (error "Unsupported instruction: %s" ins))
+          (mla (u/gba/assemble-ins-multiply cond t set-cond d a2 a1 a0))
+          (mov (u/gba/assemble-ins-dataprocessing cond 'mov set-cond a0 d a1 a2))
+          (mrc (error "Unsupported instruction: %s" ins))
+          (mrs (error "Unsupported instruction: %s" ins))
+          (msr (error "Unsupported instruction: %s" ins))
+          (mul (u/gba/assemble-ins-multiply cond nil set-cond d nil a1 a0))
+          (mvn (u/gba/assemble-ins-dataprocessing cond 'mvn set-cond a0 d a1 a2))
+          (orr (u/gba/assemble-ins-dataprocessing cond 'orr set-cond a0 d a1 a2))
+          (rsb (u/gba/assemble-ins-dataprocessing cond 'rsb set-cond a0 d a1 a2))
+          (rsc (u/gba/assemble-ins-dataprocessing cond 'rsc set-cond a0 d a1 a2))
+          (sbc (u/gba/assemble-ins-dataprocessing cond 'sbc set-cond a0 d a1 a2))
+          (stc (error "Unsupported instruction: %s" ins))
+          (stm (u/gba/assemble-ins-bdt cond (-contains? opbase 'pre) (-contains? opbase 'up) (-contains? opbase 'psr) (-contains? opbase 'wb) nil a0 a1))
+          (str
+           (u/gba/assemble-ins-sdt
+            cond (not a2imm) (-contains? opbase 'pre) (-contains? opbase 'up) (-contains? opbase 'byte) (-contains? opbase 'wb) nil a0 a1
+            (or a2imm (logior (lsh (nth 3 args) 4) (u/gba/assemble-reg a2)))))
+          (sub (u/gba/assemble-ins-dataprocessing cond 'sub set-cond a0 d a1 a2))
+          (swi (u/gba/assemble-ins-interrupt cond d))
+          (swp (u/gba/assemble-ins-singledataswap cond (-contains? opbase 'swap) a0 a1 a2))
+          (teq (u/gba/assemble-ins-dataprocessing cond 'teq set-cond a0 d a1 a2))
+          (tst (u/gba/assemble-ins-dataprocessing cond 'tst set-cond a0 d a1 a2)))))
+    (when check
+      (unless (equal res (u/gba/assemble-ins-string-system (u/gba/render-ins ins)))
+        (error "Instruction %s did not match system assembly" ins)))
+    res))
+
+(defun u/gba/assemble (prog)
+  "Assemble the list of instructions PROG."
+  (--mapcat
+   (u/gba/assemble-ins it)
+   prog))
 
 (defun u/gba/test-assemble-ins (ins)
   "Compare our assembly of INS with arm-none-eabi-as."
@@ -355,19 +368,65 @@ INS is either:
      (u/gba/assemble-ins ins)
      (u/gba/assemble-ins-string-system render))))
 
+(defun u/gba/relocate-ins (symtab idx ins)
+  "Replace all keywords in INS by looking up relative addresses in SYMTAB.
+We assume that this instruction is at word IDX in memory."
+  (--map
+   (if (keywordp it)
+       (if-let ((ent (u/symtab-lookup-relative symtab idx it)))
+           ent
+         (error "Unknown symbol: %s" it))
+     it)
+   ins))
+
+(defun u/gba/relocate (symtab base prog)
+  "Replace all keywords in PROG by looking up relative addresses in SYMTAB.
+We assume that PROG starts in memory at word BASE."
+  (--map-indexed (u/gba/relocate-ins symtab (+ base it-index) it) prog))
+
+(defun u/gba/link (symtab base size)
+  "Convert SYMTAB to a vector of bytes to be placed at address BASE.
+SIZE is the length of the resulting vector."
+  (let* ((mem (make-vector size 0))
+         (memwrite
+          (lambda (name addr idx bytes)
+            (if (and (>= idx 0) (< (+ idx (length bytes)) size))
+                (u/write! mem idx bytes)
+              (warn "Symbol table entry %s at %s is out of bounds" name addr)))))
+    (--each (ht->alist (u/symtab-symbols symtab))
+      (let* ((name (car it))
+             (entry (cdr it))
+             (type (u/symtab-entry-type entry))
+             (addr (u/symtab-entry-addr entry))
+             (idx (- addr base)))
+        (cl-case type
+          (code
+           (let* ((relocated (u/gba/relocate symtab (/ addr 4) (u/symtab-entry-data entry)))
+                  (bytes (u/gba/assemble relocated)))
+             (funcall memwrite name addr idx bytes)))
+          (bytes
+           (funcall memwrite name addr idx (u/symtab-entry-data entry)))
+          (var nil)
+          (const
+           (funcall
+            memwrite name addr idx
+            (funcall (u/symtab-entry-data entry) symtab addr)))
+          (t (error "Unknown symbol table entry type: %s" (u/symtab-entry-type it))))))
+    mem))
+
 (cl-defstruct (u/gba/header (:constructor u/gba/make-header))
   entry ;; instruction branching to entrypoint
   title ;; game title, max 12 characters
   code ;; game code, 4 characters
   maker ;; make code, 2 characters
   )
-(defun u/gba/write-header (mem header)
-  "Write HEADER to MEM."
-  (u/write!
-   mem
-   #x0000
+
+(defun u/gba/header (header)
+  "Return a function from a symbol table to a HEADER."
+  (lambda (symtab addr)
    (-concat
-    (u/gba/assemble-ins (u/gba/header-entry header))
+    (u/gba/assemble-ins
+     `(b ,(or (u/symtab-lookup-relative symtab (/ addr 4) (u/gba/header-entry header)) -2)))
     (u/pad-to 156 '()) ;; nintendo logo
     (u/pad-to 12 (seq-into (s-upcase (u/gba/header-title header)) 'list)) ;; game title
     (u/pad-to 4 (seq-into (s-upcase (u/gba/header-code header)) 'list)) ;; game code
