@@ -9,6 +9,55 @@
 (require 'ht)
 (require 'udc-utils)
 
+(defconst u/gba/size-word 4)
+(defconst u/gba/pc 'r15)
+(defconst u/gba/lr 'r14)
+(defconst u/gba/sp 'r13)
+(defconst u/gba/fp 'r11)
+
+(defvar u/gba/codegen nil)
+(cl-defstruct (u/gba/codegen (:constructor u/gba/make-codegen))
+  (frame-offset -8) ;; negative offset applied to frame pointer for next local
+  (locals (ht-create)) ;; mapping from local variable symbols to frame offsets
+  (instructions nil) ;; reversed list of generated instructions
+  )
+(defun u/gba/codegen ()
+  "Retrieve the current code generation context."
+  (or u/gba/codegen (error "Code generation context is not bound")))
+(defun u/gba/emit! (&rest ins)
+  "Emit INS to the current codegen context."
+  (--each ins
+    (push it (u/gba/codegen-instructions (u/gba/codegen)))))
+(defun u/gba/codegen-extract ()
+  "Extract the generated code from the current codegen context."
+  (reverse (u/gba/codegen-instructions (u/gba/codegen))))
+(defmacro u/gba/gen (&rest body)
+  "Run BODY in a new code generation context and return the generated instructions."
+  `(let ((u/gba/codegen (u/gba/make-codegen)))
+     ,@body
+     (u/gba/codegen-extract)))
+
+(defun u/gba/push (&rest regs)
+  "Generate a push of REGS to the stack."
+  (u/gba/emit!
+   `(stm down wb ,u/gba/sp ,regs)))
+
+(defun u/gba/pop (&rest regs)
+  "Generate a pop of REGS to the stack."
+  (u/gba/emit!
+   `(ldm wb post ,u/gba/sp ,regs)))
+
+(defun u/gba/function-header ()
+  "Generate the function header."
+  (u/gba/push u/gba/lr u/gba/fp)
+  (u/gba/emit! `(mov ,u/gba/fp ,u/gba/sp)))
+
+(defun u/gba/function-footer ()
+  "Generate the function footer."
+  (u/gba/emit! `(mov ,u/gba/sp ,u/gba/fp))
+  (u/gba/pop u/gba/lr u/gba/fp)
+  (u/gba/emit! `(bx ,u/gba/lr)))
+
 (defun u/gba/assemble-ins-string-system (ins)
   "Assemble the instruction mnemonic string INS using arm-non-eabi-as."
   (let ((asmpath (f-join "/tmp" (format "%s.asm" (make-temp-name "udc_gba_"))))
@@ -77,8 +126,8 @@
 (defun u/gba/assemble-ins-dataprocessing-arg2-shift (arg shift)
   "Given ARG and SHIFT, return properly assembled data."
   (let ((reg (u/gba/assemble-reg arg))
-        (shiftreg (u/gba/assemble-reg (cadr shift)))
-        (shty (and (car shift) (u/gba/assemble-dataprocessing-shift-type (car shift)))))
+        (shiftreg (and (listp shift) (u/gba/assemble-reg (cadr shift))))
+        (shty (and (listp shift) (car shift) (u/gba/assemble-dataprocessing-shift-type (car shift)))))
     (cond
      (reg
       (list
@@ -107,7 +156,7 @@
 
 (defun u/gba/assemble-ins-dataprocessing (cond op set-cond arg1 dest arg2 shift)
   "Given COND, OP, SET-COND, ARG1, DEST, ARG2, and SHIFT produce 4 bytes."
-  (let ((a2 (u/gba/assemble-ins-dataprocessing-arg2-shift arg2 shift)))
+  (let ((a2 (if arg2 (u/gba/assemble-ins-dataprocessing-arg2-shift arg2 shift) (list nil 0))))
     (u/split32le
      (logior
       (lsh (u/gba/assemble-cond cond) 28)
@@ -213,8 +262,30 @@ HALFWORD, and OFFSET2."
     (lsh #b1 4)
     (logand offset2 #xf))))
 
-(defun u/gba/assemble-ins-sdt (cond imm pre up byte writeback load rn rd offset)
-  "Given COND, IMM, PRE, UP, BYTE, WRITEBACK, LOAD, RN, RD, and OFFSET, :3."
+(defun u/gba/assemble-ins-sdt-offset (arg shift)
+  "Given ARG and SHIFT, return properly assembled data."
+  (let ((reg (u/gba/assemble-reg arg))
+        (shiftreg (u/gba/assemble-reg (cadr shift)))
+        (shty (and (car shift) (u/gba/assemble-dataprocessing-shift-type (car shift)))))
+    (cond
+     (reg
+      (list
+       nil
+       (logior
+        (lsh
+         (cond
+          ((not (and (listp shift) shty)) 0)
+          (shiftreg (logior (lsh shiftreg 3) (lsh shty 1) 1))
+          ((integerp (cadr shift)) (logior (lsh (logand #b11111 (cadr shift)) 3) (lsh shty 1) 0))
+          (t (error "Invalid shift: %s" shift)))
+         4)
+        reg)))
+     ((integerp arg)
+      (logand #xfff arg))
+     (t 0))))
+
+(defun u/gba/assemble-ins-sdt (cond imm pre up byte writeback load rd rn offset shift)
+  "Given COND, IMM, PRE, UP, BYTE, WRITEBACK, LOAD, RN, RD, OFFSET, and SHIFT."
   (u/split32le
    (logior
     (lsh (u/gba/assemble-cond cond) 28)
@@ -227,8 +298,14 @@ HALFWORD, and OFFSET2."
     (lsh (u/gba/assemble-flag load) 20)
     (lsh (u/gba/assemble-reg rn) 16)
     (lsh (u/gba/assemble-reg rd) 12)
-    (logand offset #xfff))))
+    (u/gba/assemble-ins-sdt-offset offset shift))))
 
+(defun u/gba/assemble-ins-bdt-reglist (reglist)
+  "Return a 16-bit integer representing REGLIST."
+  (--reduce-from
+   (logior acc (lsh 1 (u/gba/assemble-reg it)))
+   0
+   reglist))
 (defun u/gba/assemble-ins-bdt (cond pre up byte writeback load rn reglist)
   "Given COND, PRE, UP, BYTE, WRITEBACK, LOAD, RN, and REGLIST, :3."
   (u/split32le
@@ -241,7 +318,7 @@ HALFWORD, and OFFSET2."
     (lsh (u/gba/assemble-flag writeback) 21)
     (lsh (u/gba/assemble-flag load) 20)
     (lsh (u/gba/assemble-reg rn) 16)
-    (logand reglist #xffff))))
+    (logand (u/gba/assemble-ins-bdt-reglist reglist) #xffff))))
 
 (defun u/gba/assemble-ins-branch (cond link offset)
   "Given COND, LINK, and OFFSET, produce 4 bytes."
@@ -283,6 +360,13 @@ HALFWORD, and OFFSET2."
     (cond
      ((-contains? '(b bl) op)
       (s-concat (u/gba/render-op op) rcond " " (format "pc+%d" (* (+ (car args) 2) 4))))
+     ((-contains? '(ldr str) op)
+      (s-concat
+       (u/gba/render-op op) rcond " "
+       (u/gba/render-arg (car args)) ", ["
+       (u/gba/render-arg (cadr args)) ", "
+       (if (caddr args) (u/gba/render-arg (caddr args)) "#0")
+       "]"))
      (t
       (s-concat
        (u/gba/render-op op)
@@ -300,14 +384,12 @@ INS is either:
        (opbase (if (listp ins) ins nil))
        (set-cond (-contains? opbase 's))
        (cond (or (car (--filter (-contains? u/gba/conds it) opbase)) 'al))
-       (args (--filter (not (-contains? (list cond 's) it)) (cdr opbase)))
+       (args (--filter (not (-contains? (list cond 's 'post 'down 'pst 'wb 'byte) it)) (cdr opbase)))
        (d (car args))
        (dimm (u/gba/assemble-imm d))
        (a0 (cadr args))
        (a1 (caddr args))
        (a2 (cadddr args))
-       (a2imm (u/gba/assemble-imm a2))
-       (a3 (nth 4 args))
        (res
         (cl-case op
           (adc (u/gba/assemble-ins-dataprocessing cond 'adc set-cond a0 d a1 a2))
@@ -322,14 +404,15 @@ INS is either:
           (cmp (u/gba/assemble-ins-dataprocessing cond 'cmp set-cond a0 d a1 a2))
           (eor (u/gba/assemble-ins-dataprocessing cond 'eor set-cond a0 d a1 a2))
           (ldc (error "Unsupported instruction: %s" ins))
-          (ldm (u/gba/assemble-ins-bdt cond (-contains? opbase 'pre) (-contains? opbase 'up) (-contains? opbase 'psr) (-contains? opbase 'wb) t a0 a1))
+          (ldm (u/gba/assemble-ins-bdt cond (not (-contains? opbase 'post)) (not (-contains? opbase 'down)) (-contains? opbase 'psr) (-contains? opbase 'wb) t d a0))
           (ldr
            (u/gba/assemble-ins-sdt
-            cond (not a2imm) (-contains? opbase 'pre) (-contains? opbase 'up) (-contains? opbase 'byte) (-contains? opbase 'wb) t a0 a1
-            (or a2imm (logior (lsh a3 4) (u/gba/assemble-reg a2)))))
+            cond
+            (u/gba/assemble-reg a1) (not (-contains? opbase 'post)) (not (-contains? opbase 'down)) (-contains? opbase 'byte) (-contains? opbase 'wb) t
+            d a0 a1 a2))
           (mcr (error "Unsupported instruction: %s" ins))
           (mla (u/gba/assemble-ins-multiply cond t set-cond d a2 a1 a0))
-          (mov (u/gba/assemble-ins-dataprocessing cond 'mov set-cond a0 d a1 a2))
+          (mov (u/gba/assemble-ins-dataprocessing cond 'mov set-cond 'r0 d a0 a1))
           (mrc (error "Unsupported instruction: %s" ins))
           (mrs (error "Unsupported instruction: %s" ins))
           (msr (error "Unsupported instruction: %s" ins))
@@ -340,16 +423,18 @@ INS is either:
           (rsc (u/gba/assemble-ins-dataprocessing cond 'rsc set-cond a0 d a1 a2))
           (sbc (u/gba/assemble-ins-dataprocessing cond 'sbc set-cond a0 d a1 a2))
           (stc (error "Unsupported instruction: %s" ins))
-          (stm (u/gba/assemble-ins-bdt cond (-contains? opbase 'pre) (-contains? opbase 'up) (-contains? opbase 'psr) (-contains? opbase 'wb) nil a0 a1))
+          (stm (u/gba/assemble-ins-bdt cond (not (-contains? opbase 'post)) (not (-contains? opbase 'down)) (-contains? opbase 'psr) (-contains? opbase 'wb) nil d a0))
           (str
            (u/gba/assemble-ins-sdt
-            cond (not a2imm) (-contains? opbase 'pre) (-contains? opbase 'up) (-contains? opbase 'byte) (-contains? opbase 'wb) nil a0 a1
-            (or a2imm (logior (lsh (nth 3 args) 4) (u/gba/assemble-reg a2)))))
+            cond
+            (u/gba/assemble-reg a1) (not (-contains? opbase 'post)) (not (-contains? opbase 'down)) (-contains? opbase 'byte) (-contains? opbase 'wb) nil
+            d a0 a1 a2))
           (sub (u/gba/assemble-ins-dataprocessing cond 'sub set-cond a0 d a1 a2))
           (swi (u/gba/assemble-ins-interrupt cond d))
           (swp (u/gba/assemble-ins-singledataswap cond (-contains? opbase 'swap) a0 a1 a2))
           (teq (u/gba/assemble-ins-dataprocessing cond 'teq set-cond a0 d a1 a2))
-          (tst (u/gba/assemble-ins-dataprocessing cond 'tst set-cond a0 d a1 a2)))))
+          (tst (u/gba/assemble-ins-dataprocessing cond 'tst set-cond a0 d a1 a2))
+          (t (error "Unknown opcode: %s" ins)))))
     (when check
       (unless (equal res (u/gba/assemble-ins-string-system (u/gba/render-ins ins)))
         (error "Instruction %s did not match system assembly" ins)))
@@ -439,6 +524,26 @@ SIZE is the length of the resulting vector."
     '(#x00) ;; header checksum
     (u/pad-to 2 '()) ;; reserved area
     )))
+
+;;;; Helper routines
+(defun u/gba/constant (r constant)
+  "Generate code loading the (maximum 32-bit CONSTANT) into R."
+  (unless (integerp constant)
+    (error "Attempt to generate bad constant: %s" constant))
+  (u/gba/gen
+   (u/gba/emit! `(mov ,r ,(logand #x000000ff constant)))
+   (when (> constant #xff)
+     (u/gba/emit! `(orr ,r ,r ,(lsh (logand #x0000ff00 constant) -8) 12)))
+   (when (> constant #xffff)
+     (u/gba/emit! `(orr ,r ,r ,(lsh (logand #x00ff0000 constant) -16) 8)))
+   (when (> constant #xffffff)
+     (u/gba/emit! `(orr ,r ,r ,(lsh (logand #xff000000 constant) -24) 4)))))
+
+(defun u/gba/write-pixel (x y r g b)
+  "Write R G B pixel to X,Y."
+  `(,@(u/gba/constant 'r0 (+ #x06000000 (* 2 (+ x (* y 240)))))
+    ,@(u/gba/constant 'r1 (logior (lsh (logand #b11111 r) 10) (lsh (logand #b11111 g) 5) (logand #b11111 b)))
+    (str r1 r0)))
 
 (provide 'udc-gba)
 ;;; udc-gba.el ends here
