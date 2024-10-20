@@ -145,5 +145,12 @@ Return a list of the width, height, and pixels of the image."
     (* 0.5870 (cadr p))
     (* 0.1140 (caddr p)))))
 
+(defun u/rgb-color-distance (c0 c1)
+  "Determine the distance between two RGB colors C0 and C1."
+  (let* ((r0 (car c0)) (g0 (cadr c0)) (b0 (caddr c0))
+         (r1 (car c1)) (g1 (cadr c1)) (b1 (caddr c1))
+         (dr (- r0 r1)) (dg (- g0 g1)) (db (- b0 b1)))
+    (sqrt (+ (* dr dr) (* dg dg) (* db db)))))
+
 (provide 'udc-utils)
 ;;; udc-utils.el ends here

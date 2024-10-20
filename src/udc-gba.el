@@ -20,17 +20,35 @@
   (frame-offset -8) ;; negative offset applied to frame pointer for next local
   (locals (ht-create)) ;; mapping from local variable symbols to frame offsets
   (instructions nil) ;; reversed list of generated instructions
+  (local-labels (ht-create)) ;; mapping from label keywords to word offsets from start
   )
 (defun u/gba/codegen ()
   "Retrieve the current code generation context."
   (or u/gba/codegen (error "Code generation context is not bound")))
+(defun u/gba/codegen-replace-local-labels (ins idx)
+  "Replace local labels from the current codegen context in INS at IDX."
+  (--map
+   (if (and (keywordp it) (ht-contains? (u/gba/codegen-local-labels (u/gba/codegen)) it))
+       (let ((insoff (+ 1 idx))
+             (laboff (ht-get (u/gba/codegen-local-labels (u/gba/codegen)) it)))
+         (- laboff insoff 1))
+     it)
+   ins))
 (defun u/gba/emit! (&rest ins)
   "Emit INS to the current codegen context."
   (--each ins
-    (push it (u/gba/codegen-instructions (u/gba/codegen)))))
+    (cond
+     ((keywordp it)
+      (ht-set!
+       (u/gba/codegen-local-labels (u/gba/codegen))
+       it (length (u/gba/codegen-instructions (u/gba/codegen)))))
+     (t
+      (push it (u/gba/codegen-instructions (u/gba/codegen)))))))
 (defun u/gba/codegen-extract ()
   "Extract the generated code from the current codegen context."
-  (reverse (u/gba/codegen-instructions (u/gba/codegen))))
+  (--map-indexed
+   (u/gba/codegen-replace-local-labels it it-index)
+   (reverse (u/gba/codegen-instructions (u/gba/codegen)))))
 (defmacro u/gba/gen (&rest body)
   "Run BODY in a new code generation context and return the generated instructions."
   `(let ((u/gba/codegen (u/gba/make-codegen)))
@@ -59,7 +77,7 @@
   (u/gba/emit! `(bx ,u/gba/lr)))
 
 (defun u/gba/assemble-ins-string-system (ins)
-  "Assemble the instruction mnemonic string INS using arm-non-eabi-as."
+  "Assemble the instruction mnemonic string INS using arm-none-eabi-as."
   (let ((asmpath (f-join "/tmp" (format "%s.asm" (make-temp-name "udc_gba_"))))
         (objpath (f-join "/tmp" (format "%s.o" (make-temp-name "udc_gba_"))))
         (dumppath (f-join "/tmp" (format "%s.dump" (make-temp-name "udc_gba_"))))
@@ -79,6 +97,7 @@
   "Return the value for X if X is an immediate."
   (and (integerp x) x))
 
+(defconst u/gba/flags '(s post down pst wb byte))
 (defconst u/gba/conds '(eq ne cs cc mi pl vs vc hi ls ge lt gt le al))
 (defun u/gba/assemble-cond (cond)
   "Given COND, return its 4-bit encoding."
@@ -356,13 +375,13 @@ HALFWORD, and OFFSET2."
          (opbase (if (listp ins) ins nil))
          (cond (car (--filter (-contains? u/gba/conds it) opbase)))
          (rcond (if cond (u/gba/render-cond cond) ""))
-         (args (--filter (not (-contains? (list cond) it)) (cdr opbase))))
+         (args (--filter (not (-contains? (cons cond u/gba/flags) it)) (cdr opbase))))
     (cond
      ((-contains? '(b bl) op)
       (s-concat (u/gba/render-op op) rcond " " (format "pc+%d" (* (+ (car args) 2) 4))))
      ((-contains? '(ldr str) op)
       (s-concat
-       (u/gba/render-op op) rcond " "
+       (u/gba/render-op op) rcond (if (-contains? opbase 'byte) "b" "") " "
        (u/gba/render-arg (car args)) ", ["
        (u/gba/render-arg (cadr args)) ", "
        (if (caddr args) (u/gba/render-arg (caddr args)) "#0")
@@ -384,7 +403,7 @@ INS is either:
        (opbase (if (listp ins) ins nil))
        (set-cond (-contains? opbase 's))
        (cond (or (car (--filter (-contains? u/gba/conds it) opbase)) 'al))
-       (args (--filter (not (-contains? (list cond 's 'post 'down 'pst 'wb 'byte) it)) (cdr opbase)))
+       (args (--filter (not (-contains? (cons cond u/gba/flags) it)) (cdr opbase)))
        (d (car args))
        (dimm (u/gba/assemble-imm d))
        (a0 (cadr args))
@@ -539,11 +558,108 @@ SIZE is the length of the resulting vector."
    (when (> constant #xffffff)
      (u/gba/emit! `(orr ,r ,r ,(lsh (logand #xff000000 constant) -24) 4)))))
 
+(defun u/gba/addr (r symtab sym)
+  "Generate code loading the address in SYMTAB for SYM into R."
+  (u/gba/constant r (u/symtab-entry-addr (u/symtab-lookup symtab sym))))
+
 (defun u/gba/write-pixel (x y r g b)
   "Write R G B pixel to X,Y."
   `(,@(u/gba/constant 'r0 (+ #x06000000 (* 2 (+ x (* y 240)))))
-    ,@(u/gba/constant 'r1 (logior (lsh (logand #b11111 r) 10) (lsh (logand #b11111 g) 5) (logand #b11111 b)))
-    (str r1 r0)))
+    ,@(u/gba/constant
+       'r1
+       (logior
+        (lsh (logand #b11111 r) 10)
+        (lsh (logand #b11111 g) 5)
+        (logand #b11111 b)))
+    (str byte r1 r0)
+    (mov r1 r1 (lsr 8))
+    (str byte r1 r0 1)))
+
+(cl-defstruct (u/gba/palette (:constructor u/gba/make-palette))
+ colors)
+
+(defun u/gba/palette-bytes (pal)
+  "Given PAL, return the corresponding bytes."
+  (--mapcat
+   (let ((r (car it)) (g (cadr it)) (b (caddr it)))
+     (u/split16le
+      (logior
+       (lsh (logand #b11111 (lsh b -3)) 10)
+       (lsh (logand #b11111 (lsh g -3)) 5)
+       (logand #b11111 (lsh r -3)))))
+   (u/gba/palette-colors pal)))
+
+(defun u/gba/palette-closest (pal rgb)
+  "Return the index of the color in PAL that is closest to RGB."
+  (cdr
+   (-min-by
+    (-on #'> #'car)
+    (--map-indexed
+     (cons
+      (u/rgb-color-distance it rgb)
+      it-index)
+     (u/gba/palette-colors pal)))))
+
+(defun u/gba/image-quantize-palette (pal)
+  "Return a quantize function that will return indices in PAL."
+  (lambda (rgb)
+    (u/gba/palette-closest pal rgb)))
+
+(defun u/gba/image-tiles (quantize image)
+  "Convert IMAGE (a list of width, height, pixels) into tile data and a tilemap.
+QUANTIZE should be a function that converts an RBG pixel to a 4-bit color index."
+  (let*
+      ((width (car image))
+       (height (cadr image))
+       (width-tiles (ceiling (/ width 8.0)))
+       (height-tiles (ceiling (/ height 8.0)))
+       (quantized (seq-into (-map quantize (caddr image)) 'vector)))
+    (cl-flet*
+        ((getpixel (x y)
+           (if (or (< x 0) (>= x width) (< y 0) (>= y height))
+               0
+             (aref quantized (+ x (* y width)))))
+         (getrow (x y)
+           (--map (getpixel (+ x it) y) (-iota 8)))
+         (gettile (tx ty)
+           (let ((x (* tx 8))
+                 (y (* ty 8)))
+             (-flatten
+              (--map
+               (getrow x (+ y it))
+               (-iota 8))))))
+      (let* ((tiles
+              (-mapcat
+               (lambda (y)
+                 (-map
+                  (lambda (x)
+                    (cons (cons x y) (gettile x y)))
+                  (-iota width-tiles)))
+               (-iota height-tiles))))
+        tiles))))
+
+(defun u/gba/tile-s-bytes (stile)
+  "Convert the list of nibbles STILE into bytes."
+  (if (and stile (car stile) (cadr stile))
+      (cons (logior (car stile) (lsh (cadr stile) 4)) (u/gba/tile-s-bytes (cddr stile)))
+    nil))
+
+(defun u/gba/test ()
+  "Test function."
+  (u/gba/gen ;; len in r1, src in r2, dst in r3
+   (u/gba/function-header)
+   (u/gba/push 'r4)
+   (u/gba/emit!
+    :start
+    '(sub s r1 r1 1)
+    '(b lt :end)
+    '(ldr post wb r4 r2 4)
+    '(str post wb r4 r3 4)
+    '(b :start)
+    :end
+    )
+   (u/gba/pop 'r4)
+   (u/gba/function-footer)))
 
 (provide 'udc-gba)
 ;;; udc-gba.el ends here
