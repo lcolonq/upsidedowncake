@@ -25,7 +25,8 @@
      (0 255 0)
      (0 0 63)
      (0 0 127)
-     (0 0 255))))
+     (0 0 255)
+     )))
 
 (defconst g/image (u/gba/image-tiles (u/gba/image-quantize-palette g/palette) (u/load-image-ff "~/src/upsidedowncake/assets/test.ff")))
 
@@ -38,11 +39,12 @@
 
 (u/symtab-add-entry! g/symtab :reg-dispcnt (u/make-symtab-entry :addr #x4000000 :type 'var :data 4))
 (u/symtab-add-entry! g/symtab :reg-bg0cnt (u/make-symtab-entry :addr #x4000008 :type 'var :data 2))
-(u/symtab-add-entry! g/symtab :vram (u/make-symtab-entry :addr #x6000000 :type 'var :data (* 96 1024)))
-(u/symtab-add-entry! g/symtab :vram-screenblock8 (u/make-symtab-entry :addr #x6004000 :type 'var :data 2048))
-(u/symtab-add-entry!
- g/symtab :palette-bg
- (u/make-symtab-entry :addr #x5000000 :type 'var :data 512))
+(u/symtab-add-entry! g/symtab :palette-bg (u/make-symtab-entry :addr #x5000000 :type 'var :data 512))
+(u/symtab-add-entry! g/symtab :palette-sprite (u/make-symtab-entry :addr #x5000200 :type 'var :data 512))
+(u/symtab-add-entry! g/symtab :vram-bg (u/make-symtab-entry :addr #x6000000 :type 'var :data (* 64 1024)))
+(u/symtab-add-entry! g/symtab :vram-bg-screenblock8 (u/make-symtab-entry :addr #x6004000 :type 'var :data 2048))
+(u/symtab-add-entry! g/symtab :vram-sprite (u/make-symtab-entry :addr #x6010000 :type 'var :data (* 32 1024)))
+(u/symtab-add-entry! g/symtab :oam (u/make-symtab-entry :addr #x7000000 :type 'var :data 1024))
 
 (u/symtab-add!
  g/symtab :data :data-palette
@@ -77,44 +79,68 @@
    ;; (mov r1 10)
    ;; (bl :fact)
 
+   ;; load palette into background palette
    (mov r1 8)
    ,@(u/gba/addr 'r2 g/symtab :data-palette)
    ,@(u/gba/addr 'r3 g/symtab :palette-bg)
    (bl :wordcopy)
 
-   (mov r1 32)
-   ,@(u/gba/addr 'r2 g/symtab :data-tiles)
-   ,@(u/gba/addr 'r3 g/symtab :vram)
+   ;; load palette into sprite palette
+   (mov r1 8)
+   ,@(u/gba/addr 'r2 g/symtab :data-palette)
+   ,@(u/gba/addr 'r3 g/symtab :palette-sprite)
    (bl :wordcopy)
 
-   ;; write some colors to background palette
-   ;; ,@(u/gba/addr 'r0 g/symtab :palette-bg)
-   ;; ,@(u/gba/constant 'r1 #b00000000000111110000001111100000)
-   ;; (str r1 r0)
-
-   ;; write some tile data to charblock
-   ;; ,@(u/gba/addr 'r0 g/symtab :vram)
-   ;; (mov r1 #b00000000000000000000000000010000)
-   ;; (str r1 r0)
+   ;; load tile data into background charblock 0
+   (mov r1 32)
+   ,@(u/gba/addr 'r2 g/symtab :data-tiles)
+   ,@(u/gba/addr 'r3 g/symtab :vram-bg)
+   (bl :wordcopy)
 
    ;; write tile index to screenblock
-   ,@(u/gba/addr 'r0 g/symtab :vram-screenblock8)
+   ,@(u/gba/addr 'r0 g/symtab :vram-bg-screenblock8)
    ,@(u/gba/constant 'r1 #x00010000)
    (str r1 r0)
    ,@(u/gba/constant 'r1 #x00030002)
    (str r1 r0 64)
 
-   ;; set video mode
-   ,@(u/gba/addr 'r0 g/symtab :reg-dispcnt)
-   ,@(u/gba/constant 'r1 #x0100) ;; turn on BG0, mode 0
+   ;; write some data to sprite charblock 0
+   ,@(u/gba/addr 'r0 g/symtab :vram-sprite)
+   ,@(u/gba/constant 'r1 #xDDDDDDDD)
    (str r1 r0)
 
-   ;; set BG0 control flags
+   ;; set video mode
+   ,@(u/gba/addr 'r0 g/symtab :reg-dispcnt)
+   ;; ,@(u/gba/constant 'r1 #b0001000100000000) ;; turn on BG0 and sprites, mode 0
+   ,@(u/gba/constant 'r1 #b0001000000000000) ;; turn on sprites, mode 0
+   (str r1 r0)
+
+   ;; set BG0 control flags to render background starting at screenblock 8
    ,@(u/gba/addr 'r0 g/symtab :reg-bg0cnt)
    ,@(u/gba/constant 'r1 #b0000100000000000)
    (str r1 r0)
 
-   (b :main)))
+   (mov r7 0)
+   (b :mainloop)))
+
+(u/symtab-add!
+ g/symtab
+ :code :mainloop 'code
+ (u/gba/gen
+  (u/gba/emit!
+   ;; set sprite 0 position in OAM
+   '(add r5 r5 1)
+   '(mov r6 r5 (lsr 31))
+   '(and s r6 r6 1)
+   '(add eq r7 r7 1)
+   '(and r7 r7 #x3f)
+   (u/gba/addr 'r0 g/symtab :oam)
+   ;; (u/gba/constant 'r1 #x00140014)
+   '(mov r1 r7)
+   '(mov r1 r1 (lsl 16))
+   '(orr r1 r1 r7)
+   '(str r1 r0)
+   '(b :mainloop))))
 
 (u/symtab-add!
  g/symtab
