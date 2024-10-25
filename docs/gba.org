@@ -1,0 +1,125 @@
+* display control
+the 16-bit display control register lives at 0x04000000
+- bits 0-2 control the video mode (0, 1, 2 are tiled, 3, 4, 5 are bitmap)
+- bit 3 is set if the cartridge is a game boy color game (read only)
+- bit 4 is page select (can be used for double-buffering in modes 4 and 5)
+- bit 5 allows access to OAM in HBlank (scary!)
+- bit 6 sets object mapping mode (0 = 2D, 1 = 1D)
+- bit 7 forces a screen blank when set
+- bits 8 enables rendering of BG0
+- bits 9 enables rendering of BG1
+- bits 10 enables rendering of BG2
+- bits 11 enables rendering of BG3
+- bits 12 enables rendering of sprites
+- bit 13 enables use of window 0 (idk)
+- bit 14 enables use of window 1 (idk)
+- bit 15 enables use of object window (idk)
+* palette - 512 bytes
+a big array of 256 16-bit colors
+each color has 5 bits for each R, G, and B component and one unused bit
+* charblock - 16384 bytes (512 4bpp or 256 8bpp tiles)
+charblocks contains the actual tile pixel data
+tiles are 8x8, and either 4 bits/pixel or 8 bits/pixel
+so they are either 32 or 64 bytes long, and you can fit either 512 or 256 tiles to a charblock
+* screenblock - 2048 bytes (1024 screen entries)
+screenblocks are background tilemaps
+they are composed of 16-bit "screen entries" (and so therefore y.
+screen entries look like the following:
+- bits 0-9 are a tile index
+- bit 10 is flag to horizontally flip the tile
+- bit 11 is flag to vertically flip the tile
+- bits 12-15 are a 4-bit palette bank to use in 4 bit/pixel mode
+  (ignored otherwise, basically it's the high 4 bits)
+note that backgrounds can be bigger than one screenblock!
+the largest backgrounds are 64x64 tiles, meaning they must be spread over 4 screenblocks
+* backgrounds
+the background palette lives at 0x05000000
+
+background charblocks:
+| Memory      | 0x06000000 | 0x06004000 | 0x06008000 | 0x0600C000 |
+|-------------+------------+------------+------------+------------|
+| charblock   |          0 |          1 |          2 |          3 |
+| screenblock |    0 ... 7 |   8 ... 15 |  16 ... 23 |  24 ... 31 |
+
+there are 4 backgrounds, BG0 BG1 BG2 and BG3
+each background is controlled by 3 16-bit registers
+| REG_BG0CNT  | 0x04000008 | Control           |
+| REG_BG1CNT  | 0x0400000a | Control           |
+| REG_BG2CNT  | 0x0400000c | Control           |
+| REG_BG3CNT  | 0x0400000e | Control           |
+| REG_BG0HOFS | 0x04000010 | Horizontal Offset |
+| REG_BG0VOFS | 0x04000012 | Vertical Offset   |
+| REG_BG1HOFS | 0x04000014 | Horizontal Offset |
+| REG_BG1VOFS | 0x04000016 | Vertical Offset   |
+| REG_BG2HOFS | 0x04000018 | Horizontal Offset |
+| REG_BG2VOFS | 0x0400001a | Vertical Offset   |
+| REG_BG3HOFS | 0x0400001c | Horizontal Offset |
+| REG_BG3VOFS | 0x0400001e | Vertical Offset   |
+
+the REG_BGxCNT register is layed out as follows:
+- bits 0-1 are a priority value that determines the order of the backgrounds
+- bits 2-3 are an integer that determines the base charblock for tile indexing
+- bits 4-5 are UNUSED!!! REMEMBER!!!
+- bit 6 is the mosaic flag
+- bit 7 is the color mode - 4bpp if 0, 8bpp if 1
+- bits 8-12 is an integer that determines the base screenblock for the background
+- bit 13 is the affine wrapping flag
+- bit 14-15 is the size of the background. interpreted as follows:
+  | Size bits | dimensions in tiles | dimensions in pixels |
+  |-----------+---------------------+----------------------|
+  |        00 |               32x32 |              256x256 |
+  |        01 |               64x32 |              512x256 |
+  |        10 |               32x64 |              256x512 |
+  |        11 |               64x64 |              512x512 |
+* sprites
+the sprite palette lives at 0x05000200
+
+| Memory      | 0x06010000 | 0x06014000 |
+|-------------+------------+------------|
+| charblock   |          0 |          1 |
+
+note that for SPRITES ONLY (REMEMBER!) tile indices are done differently for 8bpp
+8bpp sprite tiles in the charblock are indexed by multiples of two
+e.g. the first 8bpp tile is index 0, the second is index 2, the third is index 4, etc.
+
+sprites are controlled by OAM - this starts at 0x07000000 and is 1024 bytes long
+every entry in OAM is 8 bytes long: there are 3 16-bit attribute fields, and then 2 skipped bytes
+(skipped bytes are eventually used for affine stuff, i think unrelated to the specific sprite)
+
+the first attribute field:
+- bits 0-7 are the Y coordinate of the sprite
+- bits 8-9 used to hide the sprite or control affine mode:
+  | Bits | Meaning              |
+  |------+----------------------|
+  |   00 | Normal rendering     |
+  |   01 | Affine sprite        |
+  |   10 | Hide sprite          |
+  |   11 | Affine sprite double |
+- bits 10-11 set flags for special effects
+  | Bits | Meaning                           |
+  |------+-----------------------------------|
+  |   00 | Normal rendering                  |
+  |   01 | Enable alpha blending             |
+  |   10 | Sprite part of object window? idk |
+  |   11 | Forbidden                         |
+- bit 12 enables mosaic effect
+- bit 13 sets the color mode: 4bpp if 0; 8pp if 1
+- bits 14-15 determine the sprite shape alongside the sprite size in the next attribute field
+
+the second attribute field:
+- bits 0-8 are the X coordinate of the sprite
+- bits 9-13 determine the affine index only if we are in affine mode
+- bits 12-13 are determine horizontal and vertical flipping (only if affine mode is clear)
+- bits 14-15 are the size of the sprite; these determine the dimensions along with the shape
+
+| shape (down) \ size (across) |   00 |    01 |    10 |    11 |
+|------------------------------+------+-------+-------+-------|
+|                           00 |  8x8 | 16x16 | 32x32 | 64x64 |
+|                           01 | 16x8 |  32x8 | 32x16 | 64x32 |
+|                           10 | 8x16 |  8x32 | 16x32 | 32x64 |
+
+the third attribute field:
+- bits 0-9 are the base tile index of the sprite
+- bits 10-11 are the priority: higher priorities are drawn first
+  (and therefore lower priorities are on top)
+- bits 12-15 are used as the high bits to index into the palette in 4bpp mode
