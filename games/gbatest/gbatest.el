@@ -27,14 +27,13 @@
      (0 0 127)
      (0 0 255))))
 
-(defconst g/image (u/gba/image-tiles (u/gba/image-quantize-palette g/palette) (u/load-image-ff "~/src/upsidedowncake/mrgreen.ff")))
+(defconst g/image (u/gba/image-tiles (u/gba/image-quantize-palette g/palette) (u/load-image-ff "~/src/upsidedowncake/assets/test.ff")))
 
 (defconst g/symtab (u/make-symtab))
-(defconst g/rom-start #x8000000)
 
-(u/symtab-add-section! g/symtab :header g/rom-start)
-(u/symtab-add-section! g/symtab :code (+ g/rom-start #x1000))
-(u/symtab-add-section! g/symtab :data (+ g/rom-start #x20000))
+(u/symtab-add-section! g/symtab :header u/gba/rom-start)
+(u/symtab-add-section! g/symtab :code (+ u/gba/rom-start #x1000))
+(u/symtab-add-section! g/symtab :data (+ u/gba/rom-start #x20000))
 (u/symtab-add-section! g/symtab :ioram #x4000000)
 
 (u/symtab-add-entry! g/symtab :reg-dispcnt (u/make-symtab-entry :addr #x4000000 :type 'var :data 4))
@@ -45,19 +44,15 @@
  g/symtab :palette-bg
  (u/make-symtab-entry :addr #x5000000 :type 'var :data 512))
 
-(u/symtab-add-entry!
- g/symtab :data-palette
- (u/make-symtab-entry
-  :addr (+ g/rom-start #x20000)
-  :type 'bytes
-  :data (u/gba/palette-bytes g/palette)))
+(u/symtab-add!
+ g/symtab :data :data-palette
+ 'bytes
+ (u/gba/palette-bytes g/palette))
 
-(u/symtab-add-entry!
- g/symtab :data-tiles
- (u/make-symtab-entry
-  :addr (+ g/rom-start #x21000)
-  :type 'bytes
-  :data (--mapcat (u/gba/tile-s-bytes (cdr it)) g/image)))
+(u/symtab-add!
+ g/symtab :data :data-tiles
+ 'bytes
+ (--mapcat (u/gba/tile-s-bytes (cdr it)) g/image))
 
 (u/symtab-add!
  g/symtab
@@ -154,7 +149,7 @@
   (u/gba/function-footer)
   ))
 
-(defconst g/linked (u/gba/link g/symtab g/rom-start #x25000))
+(defconst g/linked (u/gba/link g/symtab u/gba/rom-start #x25000))
 (defconst g/rom
   (seq-mapcat
    #'byte-to-string

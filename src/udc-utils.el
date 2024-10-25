@@ -9,6 +9,7 @@
 (require 'ht)
 (require 'eieio)
 
+;;;; Utility macros
 (defmacro u/defstruct (name &rest body)
   "Define a structure with NAME (with the constructor under the u/ namespace).
 BODY is passed directly to `cl-defstruct'."
@@ -21,6 +22,7 @@ BODY is passed directly to `cl-defstruct'."
   "Lookup SLOT in the struct S."
   `(eieio-oref ,s (quote ,slot)))
 
+;;;; Symbol tables
 (u/defstruct
  u/symtab
  (symbols (ht-create)) ;; hash table mapping symbols to entries
@@ -73,6 +75,45 @@ BODY is passed directly to `cl-defstruct'."
       ((ent (u/symtab-lookup symtab name))
        (addrword (/ (u/symtab-entry-addr ent) 4)))
     (- addrword base 2)))
+
+;;;; Structs
+(u/defstruct
+ u/structdef
+ size
+ (fields (ht-create)) ;; hash table mapping symbols to offsets
+ )
+(defun u/struct (align &rest fields)
+  "Define a new struct and populate it with FIELDS.
+Align all fields to ALIGN.
+FIELDS should contain alternating field names and sizes."
+  (let ((ret (u/make-structdef))
+        (offset 0))
+    (cl-labels
+        ((go (xs)
+           (when (and (car xs) (cadr xs))
+             (let ((sz (u/sizeof (cadr xs))))
+               (ht-set! (u/structdef-fields ret) (car xs) offset)
+               (setf offset (* (/ (+ offset sz (- align 1)) align) align))
+               (go (cddr xs))))))
+      (go fields)
+      (setf (u/structdef-size ret) offset)
+      ret)))
+(defun u/offsetof (st field)
+  "Return the offset in bytes of FIELD in the `u/structdef' ST."
+  (ht-get (u/structdef-fields st) field))
+
+;;;; Utility functions
+(defun u/sizeof (ty)
+  "Return the size of the type TY.
+This can be a number of a symbol naming a primitive type or a `u/structdef'.
+Or other things, we'll play it by ear."
+  (cond
+   ((numberp ty) ty) ;; if we pass a number, it's the size in bytes
+   ((eq ty 'u8) 1)
+   ((eq ty 'u16) 2)
+   ((eq ty 'u32) 4)
+   ((u/structdef-p ty) (u/structdef-size ty))
+   (t (error "Attempted to get the size of unknown type: %s" ty))))
 
 (defun u/split16be (w16)
   "Split the 16-bit W16 into a big-endian list of 8-bit integers."

@@ -9,73 +9,16 @@
 (require 'ht)
 (require 'udc-utils)
 
+;;;; Constants
+(defconst u/gba/rom-start #x8000000)
 (defconst u/gba/size-word 4)
 (defconst u/gba/pc 'r15)
 (defconst u/gba/lr 'r14)
 (defconst u/gba/sp 'r13)
 (defconst u/gba/fp 'r11)
+(defconst u/gba/scratch 'r4) ;; we designate r4 as our general-purpose scratch register (frequently clobbered)
 
-(defvar u/gba/codegen nil)
-(cl-defstruct (u/gba/codegen (:constructor u/gba/make-codegen))
-  (frame-offset -8) ;; negative offset applied to frame pointer for next local
-  (locals (ht-create)) ;; mapping from local variable symbols to frame offsets
-  (instructions nil) ;; reversed list of generated instructions
-  (local-labels (ht-create)) ;; mapping from label keywords to word offsets from start
-  )
-(defun u/gba/codegen ()
-  "Retrieve the current code generation context."
-  (or u/gba/codegen (error "Code generation context is not bound")))
-(defun u/gba/codegen-replace-local-labels (ins idx)
-  "Replace local labels from the current codegen context in INS at IDX."
-  (--map
-   (if (and (keywordp it) (ht-contains? (u/gba/codegen-local-labels (u/gba/codegen)) it))
-       (let ((insoff (+ 1 idx))
-             (laboff (ht-get (u/gba/codegen-local-labels (u/gba/codegen)) it)))
-         (- laboff insoff 1))
-     it)
-   ins))
-(defun u/gba/emit! (&rest ins)
-  "Emit INS to the current codegen context."
-  (--each ins
-    (cond
-     ((keywordp it)
-      (ht-set!
-       (u/gba/codegen-local-labels (u/gba/codegen))
-       it (length (u/gba/codegen-instructions (u/gba/codegen)))))
-     (t
-      (push it (u/gba/codegen-instructions (u/gba/codegen)))))))
-(defun u/gba/codegen-extract ()
-  "Extract the generated code from the current codegen context."
-  (--map-indexed
-   (u/gba/codegen-replace-local-labels it it-index)
-   (reverse (u/gba/codegen-instructions (u/gba/codegen)))))
-(defmacro u/gba/gen (&rest body)
-  "Run BODY in a new code generation context and return the generated instructions."
-  `(let ((u/gba/codegen (u/gba/make-codegen)))
-     ,@body
-     (u/gba/codegen-extract)))
-
-(defun u/gba/push (&rest regs)
-  "Generate a push of REGS to the stack."
-  (u/gba/emit!
-   `(stm down wb ,u/gba/sp ,regs)))
-
-(defun u/gba/pop (&rest regs)
-  "Generate a pop of REGS to the stack."
-  (u/gba/emit!
-   `(ldm wb post ,u/gba/sp ,regs)))
-
-(defun u/gba/function-header ()
-  "Generate the function header."
-  (u/gba/push u/gba/lr u/gba/fp)
-  (u/gba/emit! `(mov ,u/gba/fp ,u/gba/sp)))
-
-(defun u/gba/function-footer ()
-  "Generate the function footer."
-  (u/gba/emit! `(mov ,u/gba/sp ,u/gba/fp))
-  (u/gba/pop u/gba/lr u/gba/fp)
-  (u/gba/emit! `(bx ,u/gba/lr)))
-
+;;;; The assembler proper
 (defun u/gba/assemble-ins-string-system (ins)
   "Assemble the instruction mnemonic string INS using arm-none-eabi-as."
   (let ((asmpath (f-join "/tmp" (format "%s.asm" (make-temp-name "udc_gba_"))))
@@ -472,6 +415,7 @@ INS is either:
      (u/gba/assemble-ins ins)
      (u/gba/assemble-ins-string-system render))))
 
+;;;; Linker and header generation
 (defun u/gba/relocate-ins (symtab idx ins)
   "Replace all keywords in INS by looking up relative addresses in SYMTAB.
 We assume that this instruction is at word IDX in memory."
@@ -544,37 +488,52 @@ SIZE is the length of the resulting vector."
     (u/pad-to 2 '()) ;; reserved area
     )))
 
-;;;; Helper routines
-(defun u/gba/constant (r constant)
-  "Generate code loading the (maximum 32-bit CONSTANT) into R."
-  (unless (integerp constant)
-    (error "Attempt to generate bad constant: %s" constant))
-  (u/gba/gen
-   (u/gba/emit! `(mov ,r ,(logand #x000000ff constant)))
-   (when (> constant #xff)
-     (u/gba/emit! `(orr ,r ,r ,(lsh (logand #x0000ff00 constant) -8) 12)))
-   (when (> constant #xffff)
-     (u/gba/emit! `(orr ,r ,r ,(lsh (logand #x00ff0000 constant) -16) 8)))
-   (when (> constant #xffffff)
-     (u/gba/emit! `(orr ,r ,r ,(lsh (logand #xff000000 constant) -24) 4)))))
+;;;; Code generation blocks
+(defvar u/gba/codegen nil) ;; dynamically bound code generation context
+(cl-defstruct (u/gba/codegen (:constructor u/gba/make-codegen))
+  (frame-offset -8) ;; negative offset applied to frame pointer for next local
+  (locals (ht-create)) ;; mapping from local variable symbols to frame offsets
+  (instructions nil) ;; reversed list of generated instructions
+  (local-labels (ht-create)) ;; mapping from label keywords to word offsets from start
+  )
+(defun u/gba/codegen ()
+  "Retrieve the current code generation context."
+  (or u/gba/codegen (error "Code generation context is not bound")))
+(defun u/gba/codegen-replace-local-labels (ins idx)
+  "Replace local labels from the current codegen context in INS at IDX."
+  (--map
+   (if (and (keywordp it) (ht-contains? (u/gba/codegen-local-labels (u/gba/codegen)) it))
+       (let ((insoff (+ 1 idx))
+             (laboff (ht-get (u/gba/codegen-local-labels (u/gba/codegen)) it)))
+         (- laboff insoff 1))
+     it)
+   ins))
+(defun u/gba/emit! (&rest ins)
+  "Emit INS to the current codegen context."
+  (--each ins
+    (cond
+     ((keywordp it)
+      (ht-set!
+       (u/gba/codegen-local-labels (u/gba/codegen))
+       it (length (u/gba/codegen-instructions (u/gba/codegen)))))
+     ((listp (car it))
+      (apply #'u/gba/emit! it))
+     ((symbolp (car it))
+      (push it (u/gba/codegen-instructions (u/gba/codegen))))
+     (t
+      (error "Emitted malformed instruction: %s" it)))))
+(defun u/gba/codegen-extract ()
+  "Extract the generated code from the current codegen context."
+  (--map-indexed
+   (u/gba/codegen-replace-local-labels it it-index)
+   (reverse (u/gba/codegen-instructions (u/gba/codegen)))))
+(defmacro u/gba/gen (&rest body)
+  "Run BODY in a new code generation context and return the generated instructions."
+  `(let ((u/gba/codegen (u/gba/make-codegen)))
+     ,@body
+     (u/gba/codegen-extract)))
 
-(defun u/gba/addr (r symtab sym)
-  "Generate code loading the address in SYMTAB for SYM into R."
-  (u/gba/constant r (u/symtab-entry-addr (u/symtab-lookup symtab sym))))
-
-(defun u/gba/write-pixel (x y r g b)
-  "Write R G B pixel to X,Y."
-  `(,@(u/gba/constant 'r0 (+ #x06000000 (* 2 (+ x (* y 240)))))
-    ,@(u/gba/constant
-       'r1
-       (logior
-        (lsh (logand #b11111 r) 10)
-        (lsh (logand #b11111 g) 5)
-        (logand #b11111 b)))
-    (str byte r1 r0)
-    (mov r1 r1 (lsr 8))
-    (str byte r1 r0 1)))
-
+;;;; Palettes and tilemaps
 (cl-defstruct (u/gba/palette (:constructor u/gba/make-palette))
  colors)
 
@@ -643,6 +602,79 @@ QUANTIZE should be a function that converts an RBG pixel to a 4-bit color index.
   (if (and stile (car stile) (cadr stile))
       (cons (logior (car stile) (lsh (cadr stile) 4)) (u/gba/tile-s-bytes (cddr stile)))
     nil))
+
+;;;; Helpful "macros" / codegen snippets
+(defun u/gba/push (&rest regs)
+  "Generate a push of REGS to the stack."
+  (u/gba/emit!
+   `(stm down wb ,u/gba/sp ,regs)))
+
+(defun u/gba/pop (&rest regs)
+  "Generate a pop of REGS to the stack."
+  (u/gba/emit!
+   `(ldm wb post ,u/gba/sp ,regs)))
+
+(defun u/gba/function-header ()
+  "Generate the function header."
+  (u/gba/push u/gba/lr u/gba/fp)
+  (u/gba/emit! `(mov ,u/gba/fp ,u/gba/sp)))
+
+(defun u/gba/function-footer ()
+  "Generate the function footer."
+  (u/gba/emit! `(mov ,u/gba/sp ,u/gba/fp))
+  (u/gba/pop u/gba/lr u/gba/fp)
+  (u/gba/emit! `(bx ,u/gba/lr)))
+
+(defun u/gba/constant (r constant)
+  "Generate code loading the (maximum 32-bit CONSTANT) into R."
+  (unless (integerp constant)
+    (error "Attempt to generate bad constant: %s" constant))
+  (u/gba/gen
+   (u/gba/emit! `(mov ,r ,(logand #x000000ff constant)))
+   (when (> constant #xff)
+     (u/gba/emit! `(orr ,r ,r ,(lsh (logand #x0000ff00 constant) -8) 12)))
+   (when (> constant #xffff)
+     (u/gba/emit! `(orr ,r ,r ,(lsh (logand #x00ff0000 constant) -16) 8)))
+   (when (> constant #xffffff)
+     (u/gba/emit! `(orr ,r ,r ,(lsh (logand #xff000000 constant) -24) 4)))))
+
+(defun u/gba/addr (r symtab sym)
+  "Generate code loading the address in SYMTAB for SYM into R."
+  (u/gba/constant r (u/symtab-entry-addr (u/symtab-lookup symtab sym))))
+
+(defun u/gba/write-struct (r st &rest fields)
+  "Given a `u/structdef' ST, write FIELDS to the address in R."
+  (let ((field-offsets (-sort (-on #'< #'cdr) (ht->alist (u/structdef-fields st))))
+        (prev 0))
+    (u/gba/gen
+     (--each field-offsets
+       (when-let ((v (plist-get fields (car it))))
+         (cond
+          ((integerp v) ;; integer constant
+           (u/gba/emit!
+            (u/gba/constant u/gba/scratch v)
+            `(str wb ,u/gba/scratch ,r ,(- (cdr it) prev))))
+          ((symbolp v) ;; another register
+           (u/gba/emit!
+            `(str wb ,v ,r ,(- (cdr it) prev))))
+          ((listp v) ;; a list of bytes
+           (error "TODO: pack lists of bytes into words and write them"))
+          (t
+           (error "Unsupported structure field value: %s" v)))
+         (setf prev (cdr it)))))))
+
+(defun u/gba/write-pixel (x y r g b)
+  "Write R G B pixel to X,Y."
+  `(,@(u/gba/constant 'r0 (+ #x06000000 (* 2 (+ x (* y 240)))))
+    ,@(u/gba/constant
+       'r1
+       (logior
+        (lsh (logand #b11111 r) 10)
+        (lsh (logand #b11111 g) 5)
+        (logand #b11111 b)))
+    (str byte r1 r0)
+    (mov r1 r1 (lsr 8))
+    (str byte r1 r0 1)))
 
 (defun u/gba/test ()
   "Test function."
