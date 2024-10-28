@@ -123,3 +123,24 @@ the third attribute field:
 - bits 10-11 are the priority: higher priorities are drawn first
   (and therefore lower priorities are on top)
 - bits 12-15 are used as the high bits to index into the palette in 4bpp mode
+* interrupts
+all registers are disabled unless 0x04000208 is set to 1
+
+individual interrupts are enabled by setting bits in 0x04000200:
+- bit 0 enables the vblank interrupt (also requires setting a bit in the display stat register)
+- bit 1 enables the hblank interrupt (same)
+- bit 2 enables the vcount interrupt (same)
+- bits 3-6 are timer interrupts (controlled by various timer control registers also)
+- bit 7 is some link cable stuff that idk
+- bits 8-11 are DMA interrupts (requires setting DMA control registers)
+- bit 12 is the keypad interrupt (also requires setting key control register)
+- bit 13 is the cartridge interrupt (raised when the cartridge is removed)
+the same bits are set in 0x04000202 when an interrupt occurs (check inside the handler)
+
+when an interrupt occurs, the following happens:
+- registers r0-r3, r12, and lr are pushed to the stack
+- the CPU reads an address from 0x03007ffc, enters ARM state, and branches to that address
+- we can do whatever in the handler
+- we need to acknowledge that the interrupt was handled by setting its bit in 0x04000202
+- return as normal with ~bx lr~
+- registers popped, program continues normally 

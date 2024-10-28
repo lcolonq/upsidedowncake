@@ -35,16 +35,24 @@
 (u/symtab-add-section! g/symtab :header u/gba/rom-start)
 (u/symtab-add-section! g/symtab :code (+ u/gba/rom-start #x1000))
 (u/symtab-add-section! g/symtab :data (+ u/gba/rom-start #x20000))
-(u/symtab-add-section! g/symtab :ioram #x4000000)
+(u/symtab-add-section! g/symtab :vars #x02000000)
+(u/symtab-add-section! g/symtab :ioram #x04000000)
 
-(u/symtab-add-entry! g/symtab :reg-dispcnt (u/make-symtab-entry :addr #x4000000 :type 'var :data 4))
-(u/symtab-add-entry! g/symtab :reg-bg0cnt (u/make-symtab-entry :addr #x4000008 :type 'var :data 2))
-(u/symtab-add-entry! g/symtab :palette-bg (u/make-symtab-entry :addr #x5000000 :type 'var :data 512))
-(u/symtab-add-entry! g/symtab :palette-sprite (u/make-symtab-entry :addr #x5000200 :type 'var :data 512))
-(u/symtab-add-entry! g/symtab :vram-bg (u/make-symtab-entry :addr #x6000000 :type 'var :data (* 64 1024)))
-(u/symtab-add-entry! g/symtab :vram-bg-screenblock8 (u/make-symtab-entry :addr #x6004000 :type 'var :data 2048))
-(u/symtab-add-entry! g/symtab :vram-sprite (u/make-symtab-entry :addr #x6010000 :type 'var :data (* 32 1024)))
-(u/symtab-add-entry! g/symtab :oam (u/make-symtab-entry :addr #x7000000 :type 'var :data 1024))
+(u/symtab-add-entry! g/symtab :reg-dispcnt (u/make-symtab-entry :addr #x04000000 :type 'var :data 4))
+(u/symtab-add-entry! g/symtab :reg-bg0cnt (u/make-symtab-entry :addr #x04000008 :type 'var :data 2))
+(u/symtab-add-entry! g/symtab :reg-ie (u/make-symtab-entry :addr #x04000200 :type 'var :data 2))
+(u/symtab-add-entry! g/symtab :reg-if (u/make-symtab-entry :addr #x04000200 :type 'var :data 2))
+(u/symtab-add-entry! g/symtab :reg-ime (u/make-symtab-entry :addr #x04000208 :type 'var :data 1))
+(u/symtab-add-entry! g/symtab :palette-bg (u/make-symtab-entry :addr #x05000000 :type 'var :data 512))
+(u/symtab-add-entry! g/symtab :palette-sprite (u/make-symtab-entry :addr #x05000200 :type 'var :data 512))
+(u/symtab-add-entry! g/symtab :vram-bg (u/make-symtab-entry :addr #x06000000 :type 'var :data (* 64 1024)))
+(u/symtab-add-entry! g/symtab :vram-bg-screenblock8 (u/make-symtab-entry :addr #x06004000 :type 'var :data 2048))
+(u/symtab-add-entry! g/symtab :vram-sprite (u/make-symtab-entry :addr #x06010000 :type 'var :data (* 32 1024)))
+(u/symtab-add-entry! g/symtab :oam (u/make-symtab-entry :addr #x07000000 :type 'var :data 1024))
+
+(u/symtab-add! g/symtab :vars :var-test0 'var 4)
+(u/symtab-add! g/symtab :vars :var-test1 'var 2)
+(u/symtab-add! g/symtab :vars :var-test2 'var 1)
 
 (u/symtab-add!
  g/symtab :data :data-palette
@@ -64,64 +72,59 @@
 
 (u/symtab-add!
  g/symtab
- :code :main 'code
+ :code :interrupt-handler 'code
  `(
-   ;;,@(u/gba/addr 'r0 g/symtab :reg-dispcnt)
-   ;;,@(u/gba/constant 'r1 #x0403)
-   ;;(str r1 r0)
-   ;; ,@(u/gba/write-pixel 80 80 0 31 0)
-   ;; ,@(u/gba/write-pixel 82 80 0 31 0)
-   ;; ,@(u/gba/write-pixel 79 82 31 31 31)
-   ;; ,@(u/gba/write-pixel 80 83 31 31 31)
-   ;; ,@(u/gba/write-pixel 81 83 31 31 31)
-   ;; ,@(u/gba/write-pixel 82 83 31 31 31)
-   ;; ,@(u/gba/write-pixel 83 82 31 31 31)
-   ;; (mov r1 10)
-   ;; (bl :fact)
+   (bx ,u/gba/lr)
+   ))
+
+(u/symtab-add!
+ g/symtab
+ :code :main 'code
+ (u/gba/gen
+  (u/gba/emit!
+   (u/gba/setvar32 g/symtab :var-test0 #xdeadbeef)
+   (u/gba/setvar16 g/symtab :var-test1 #xcafe)
+   (u/gba/setvar8 g/symtab :var-test2 #x42)
 
    ;; load palette into background palette
-   (mov r1 8)
-   ,@(u/gba/addr 'r2 g/symtab :data-palette)
-   ,@(u/gba/addr 'r3 g/symtab :palette-bg)
-   (bl :wordcopy)
+   '(mov r1 8)
+   (u/gba/addr 'r2 g/symtab :data-palette)
+   (u/gba/addr 'r3 g/symtab :palette-bg)
+   '(bl :wordcopy)
 
    ;; load palette into sprite palette
-   (mov r1 8)
-   ,@(u/gba/addr 'r2 g/symtab :data-palette)
-   ,@(u/gba/addr 'r3 g/symtab :palette-sprite)
-   (bl :wordcopy)
+   '(mov r1 8)
+   (u/gba/addr 'r2 g/symtab :data-palette)
+   (u/gba/addr 'r3 g/symtab :palette-sprite)
+   '(bl :wordcopy)
 
    ;; load tile data into background charblock 0
-   (mov r1 32)
-   ,@(u/gba/addr 'r2 g/symtab :data-tiles)
-   ,@(u/gba/addr 'r3 g/symtab :vram-bg)
-   (bl :wordcopy)
+   '(mov r1 32)
+   (u/gba/addr 'r2 g/symtab :data-tiles)
+   (u/gba/addr 'r3 g/symtab :vram-bg)
+   '(bl :wordcopy)
 
    ;; write tile index to screenblock
-   ,@(u/gba/addr 'r0 g/symtab :vram-bg-screenblock8)
-   ,@(u/gba/constant 'r1 #x00010000)
-   (str r1 r0)
-   ,@(u/gba/constant 'r1 #x00030002)
-   (str r1 r0 64)
+   (u/gba/addr 'r0 g/symtab :vram-bg-screenblock8)
+   (u/gba/constant 'r1 #x00010000)
+   '(str r1 r0)
+   (u/gba/constant 'r1 #x00030002)
+   '(str r1 r0 64)
 
    ;; write some data to sprite charblock 0
-   ,@(u/gba/addr 'r0 g/symtab :vram-sprite)
-   ,@(u/gba/constant 'r1 #xDDDDDDDD)
-   (str r1 r0)
+   (u/gba/setvar32 g/symtab :vram-sprite #xDDDDDDDD)
 
    ;; set video mode
-   ,@(u/gba/addr 'r0 g/symtab :reg-dispcnt)
-   ;; ,@(u/gba/constant 'r1 #b0001000100000000) ;; turn on BG0 and sprites, mode 0
-   ,@(u/gba/constant 'r1 #b0001000000000000) ;; turn on sprites, mode 0
-   (str r1 r0)
+   (u/gba/setvar32 g/symtab :reg-dispcnt #b0001000100000000) ;; turn on BG0 and sprites, mode 0
 
    ;; set BG0 control flags to render background starting at screenblock 8
-   ,@(u/gba/addr 'r0 g/symtab :reg-bg0cnt)
-   ,@(u/gba/constant 'r1 #b0000100000000000)
-   (str r1 r0)
+   (u/gba/setvar32 g/symtab :reg-bg0cnt #b0000100000000000)
 
-   (mov r7 0)
-   (b :mainloop)))
+   ;; enable interrupts
+   (u/gba/setvar32 g/symtab :reg-ime 1)
+
+   '(mov r7 0)
+   '(b :mainloop))))
 
 (u/symtab-add!
  g/symtab

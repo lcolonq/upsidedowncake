@@ -17,6 +17,7 @@
 (defconst u/gba/sp 'r13)
 (defconst u/gba/fp 'r11)
 (defconst u/gba/scratch 'r4) ;; we designate r4 as our general-purpose scratch register (frequently clobbered)
+(defconst u/gba/scratch-addr 'r5)
 
 ;;;; The assembler proper
 (defun u/gba/assemble-ins-string-system (ins)
@@ -322,7 +323,7 @@ HALFWORD, and OFFSET2."
     (cond
      ((-contains? '(b bl) op)
       (s-concat (u/gba/render-op op) rcond " " (format "pc+%d" (* (+ (car args) 2) 4))))
-     ((-contains? '(ldr str) op)
+     ((-contains? '(ldr str ldrh strh) op)
       (s-concat
        (u/gba/render-op op) rcond (if (-contains? opbase 'byte) "b" "") " "
        (u/gba/render-arg (car args)) ", ["
@@ -372,6 +373,20 @@ INS is either:
             cond
             (u/gba/assemble-reg a1) (not (-contains? opbase 'post)) (not (-contains? opbase 'down)) (-contains? opbase 'byte) (-contains? opbase 'wb) t
             d a0 a1 a2))
+          (ldrh
+           (if-let ((roff (u/gba/assemble-reg a1)))
+               (u/gba/assemble-ins-hdtregister
+                cond
+                (not (-contains? opbase 'post)) (not (-contains? opbase 'down)) (-contains? opbase 'wb) t
+                a0 d (-contains? opbase 'signed) (not (-contains? opbase 'byte))
+                a1)
+             (u/gba/assemble-ins-hdtimmediate
+              cond
+              (not (-contains? opbase 'post)) (not (-contains? opbase 'down)) (-contains? opbase 'wb) t
+              a0 d
+              (logand #xf (lsh (or a1 0) -4))
+              (-contains? opbase 'signed) (not (-contains? opbase 'byte))
+              (logand #xf (or a1 0)))))
           (mcr (error "Unsupported instruction: %s" ins))
           (mla (u/gba/assemble-ins-multiply cond t set-cond d a2 a1 a0))
           (mov (u/gba/assemble-ins-dataprocessing cond 'mov set-cond 'r0 d a0 a1))
@@ -391,6 +406,20 @@ INS is either:
             cond
             (u/gba/assemble-reg a1) (not (-contains? opbase 'post)) (not (-contains? opbase 'down)) (-contains? opbase 'byte) (-contains? opbase 'wb) nil
             d a0 a1 a2))
+          (strh
+           (if-let ((roff (u/gba/assemble-reg a1)))
+               (u/gba/assemble-ins-hdtregister
+                cond
+                (not (-contains? opbase 'post)) (not (-contains? opbase 'down)) (-contains? opbase 'wb) nil
+                a0 d (-contains? opbase 'signed) (not (-contains? opbase 'byte))
+                a1)
+             (u/gba/assemble-ins-hdtimmediate
+              cond
+              (not (-contains? opbase 'post)) (not (-contains? opbase 'down)) (-contains? opbase 'wb) nil
+              a0 d
+              (logand #xf (lsh (or a1 0) -4))
+              (-contains? opbase 'signed) (not (-contains? opbase 'byte))
+              (logand #xf (or a1 0)))))
           (sub (u/gba/assemble-ins-dataprocessing cond 'sub set-cond a0 d a1 a2))
           (swi (u/gba/assemble-ins-interrupt cond d))
           (swp (u/gba/assemble-ins-singledataswap cond (-contains? opbase 'swap) a0 a1 a2))
@@ -472,11 +501,11 @@ SIZE is the length of the resulting vector."
 (defun u/gba/header (header)
   "Return a function from a symbol table to a HEADER."
   (lambda (symtab addr)
-   (-concat
-    (u/gba/assemble-ins
-     `(b ,(or (u/symtab-lookup-relative symtab (/ addr 4) (u/gba/header-entry header)) -2)))
-    (u/pad-to 156 '()) ;; nintendo logo
-    (u/pad-to 12 (seq-into (s-upcase (u/gba/header-title header)) 'list)) ;; game title
+    (-concat
+     (u/gba/assemble-ins
+      `(b ,(or (u/symtab-lookup-relative symtab (/ addr 4) (u/gba/header-entry header)) -2)))
+     (u/pad-to 156 '()) ;; nintendo logo
+     (u/pad-to 12 (seq-into (s-upcase (u/gba/header-title header)) 'list)) ;; game title
     (u/pad-to 4 (seq-into (s-upcase (u/gba/header-code header)) 'list)) ;; game code
     (u/pad-to 2 (seq-into (s-upcase (u/gba/header-maker header)) 'list)) ;; maker code
     '(#x96) ;; fixed value
@@ -641,6 +670,65 @@ QUANTIZE should be a function that converts an RBG pixel to a 4-bit color index.
 (defun u/gba/addr (r symtab sym)
   "Generate code loading the address in SYMTAB for SYM into R."
   (u/gba/constant r (u/symtab-entry-addr (u/symtab-lookup symtab sym))))
+
+(defun u/gba/setvar8 (symtab sym x) ;; NOTE: This will not work properly in VRAM
+  "Generate code setting the memory at SYM in SYMTAB to X.
+X is either a register name or a constant."
+  (let*
+      ((entry (or (u/symtab-lookup symtab sym) (error "Failed to find symbol: %s" sym)))
+       (addr (u/symtab-entry-addr entry)))
+    (u/gba/gen
+     (u/gba/emit! (u/gba/constant u/gba/scratch-addr addr))
+     (let
+         ((reg
+           (cond
+            ((u/gba/assemble-reg x)
+             x)
+            ((integerp x)
+             (u/gba/emit! `(mov ,u/gba/scratch ,(logand #x000000ff x)))
+             u/gba/scratch)
+            (t (error "Don't know how to write value: %s" x)))))
+       (u/gba/emit! `(str byte ,reg ,u/gba/scratch-addr))))))
+
+(defun u/gba/setvar16 (symtab sym x) ;; NOTE: This will not work properly in VRAM
+  "Generate code setting the memory at SYM in SYMTAB to X.
+X is either a register name or a constant."
+  (let*
+      ((entry (or (u/symtab-lookup symtab sym) (error "Failed to find symbol: %s" sym)))
+       (addr (u/symtab-entry-addr entry)))
+    (u/gba/gen
+     (u/gba/emit! (u/gba/constant u/gba/scratch-addr addr))
+     (let
+         ((reg
+           (cond
+            ((u/gba/assemble-reg x)
+             x)
+            ((integerp x)
+             (u/gba/emit! (u/gba/constant u/gba/scratch (logand #xffff x)))
+             u/gba/scratch)
+            (t (error "Don't know how to write value: %s" x)))))
+       (u/gba/emit!
+        `(strh ,reg ,u/gba/scratch-addr)
+        )))))
+
+(defun u/gba/setvar32 (symtab sym x)
+  "Generate code setting the memory at SYM in SYMTAB to X.
+X is either a register name or a constant."
+  (let*
+      ((entry (or (u/symtab-lookup symtab sym) (error "Failed to find symbol: %s" sym)))
+       (addr (u/symtab-entry-addr entry)))
+    (u/gba/gen
+     (u/gba/emit! (u/gba/constant u/gba/scratch-addr addr))
+     (let
+         ((reg
+           (cond
+            ((u/gba/assemble-reg x)
+             x)
+            ((integerp x)
+             (u/gba/emit! (u/gba/constant u/gba/scratch x))
+             u/gba/scratch)
+            (t (error "Don't know how to write value: %s" x)))))
+       (u/gba/emit! `(str ,reg ,u/gba/scratch-addr))))))
 
 (defun u/gba/write-struct (r st &rest fields)
   "Given a `u/structdef' ST, write FIELDS to the address in R."
