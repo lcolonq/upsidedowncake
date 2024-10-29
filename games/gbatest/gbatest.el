@@ -6,6 +6,7 @@
 (require 'ht)
 (require 'f)
 (add-to-list 'load-path (f-canonical "../.."))
+(setq elisp-flymake-byte-compile-load-path load-path)
 (require 'udc)
 
 (defconst
