@@ -25,6 +25,7 @@ BODY is passed directly to `cl-defstruct'."
 ;;;; Symbol tables
 (u/defstruct
  u/symtab
+ (alignment 1) ;; symbol addresses must be a multiple of this
  (symbols (ht-create)) ;; hash table mapping symbols to entries
  (sections (ht-create)) ;; hash table mapping section name symbols to the current start address
  )
@@ -57,13 +58,15 @@ BODY is passed directly to `cl-defstruct'."
 (defun u/symtab-add! (symtab section name type data)
   "Add a mapping from NAME to DATA of TYPE in SECTION of SYMTAB."
   (let* ((section-offset (ht-get (u/symtab-sections symtab) section))
-         (entry (u/make-symtab-entry :addr section-offset :type type :data data)))
+         (align (u/symtab-alignment symtab))
+         (aligned (* (/ (+ section-offset (- align 1)) align) align))
+         (entry (u/make-symtab-entry :addr aligned :type type :data data)))
     (unless section-offset
       (error "Could not find section %s when adding symbol %s" section name))
     (u/symtab-add-entry! symtab name entry)
     (ht-set!
      (u/symtab-sections symtab) section
-     (+ section-offset (u/symtab-entry-length symtab section-offset entry)))))
+     (+ aligned (u/symtab-entry-length symtab aligned entry)))))
 
 (defun u/symtab-lookup (symtab name)
   "Return the address of NAME in SYMTAB."

@@ -593,6 +593,20 @@ SIZE is the length of the resulting vector."
   (lambda (rgb)
     (u/gba/palette-closest pal rgb)))
 
+(defun u/gba/image-quantize-palette-exact (pal)
+  "Return a quantize function that will return indices in PAL.
+If the colors do not occur exactly in PAL, throw an error."
+  (lambda (rgb)
+    (let ((res (--find-index (equal it rgb) (u/gba/palette-colors pal))))
+      (or res (error "Could not find color in palette: %s" rgb)))))
+
+(cl-defstruct (u/gba/image (:constructor u/gba/make-image))
+  width
+  height
+  tiledata ;; list of lists of bytes, each constituting the pixels of one unique tile
+  cell-indices ;; alist mapping tile coordinates to indices in the tile list
+  )
+
 (defun u/gba/image-tiles (quantize image)
   "Convert IMAGE (a list of width, height, pixels) into tile data and a tilemap.
 QUANTIZE should be a function that converts an RBG pixel to a 4-bit color index."
@@ -623,13 +637,32 @@ QUANTIZE should be a function that converts an RBG pixel to a 4-bit color index.
                   (lambda (x)
                     (cons (cons x y) (gettile x y)))
                   (-iota width-tiles)))
-               (-iota height-tiles))))
-        tiles))))
+               (-iota height-tiles)))
+             (unique-tiles (-uniq (-map #'cdr tiles)))
+             (tile-indices (--map-indexed (cons it it-index) unique-tiles))
+             (cell-indices (--map (cons (car it) (alist-get (cdr it) tile-indices nil nil #'equal)) tiles))
+             (cell-indices-populated ;; fill in the "missing" coordinates in a 256x256 map
+              (-mapcat
+               (lambda (y)
+                 (-map
+                  (lambda (x)
+                    (cons (cons x y) (alist-get (cons x y) cell-indices 0 nil #'equal)))
+                  (-iota 32)))
+               (-iota 32))))
+        (print cell-indices)
+        (print cell-indices-populated)
+        (u/gba/make-image
+         :width width
+         :height height
+         :tiledata unique-tiles
+         :cell-indices cell-indices-populated)))))
 
 (defun u/gba/tile-s-bytes (stile)
   "Convert the list of nibbles STILE into bytes."
   (if (and stile (car stile) (cadr stile))
-      (cons (logior (car stile) (lsh (cadr stile) 4)) (u/gba/tile-s-bytes (cddr stile)))
+      (cons
+       (logior (car stile) (lsh (cadr stile) 4))
+       (u/gba/tile-s-bytes (cddr stile)))
     nil))
 
 ;;;; Helpful "macros" / codegen snippets
@@ -671,64 +704,113 @@ QUANTIZE should be a function that converts an RBG pixel to a 4-bit color index.
   "Generate code loading the address in SYMTAB for SYM into R."
   (u/gba/constant r (u/symtab-entry-addr (u/symtab-lookup symtab sym))))
 
-(defun u/gba/setvar8 (symtab sym x) ;; NOTE: This will not work properly in VRAM
-  "Generate code setting the memory at SYM in SYMTAB to X.
-X is either a register name or a constant."
-  (let*
-      ((entry (or (u/symtab-lookup symtab sym) (error "Failed to find symbol: %s" sym)))
-       (addr (u/symtab-entry-addr entry)))
-    (u/gba/gen
-     (u/gba/emit! (u/gba/constant u/gba/scratch-addr addr))
-     (let
-         ((reg
-           (cond
-            ((u/gba/assemble-reg x)
-             x)
-            ((integerp x)
-             (u/gba/emit! `(mov ,u/gba/scratch ,(logand #x000000ff x)))
-             u/gba/scratch)
-            (t (error "Don't know how to write value: %s" x)))))
-       (u/gba/emit! `(str byte ,reg ,u/gba/scratch-addr))))))
+(defun u/gba/scratch-reg-offset (reg &optional offset)
+  "Move REG to the scratch address and add OFFSET."
+  (u/gba/gen
+   (u/gba/emit! `(mov ,u/gba/scratch-addr ,reg))
+   (cond
+    ((u/gba/assemble-reg offset)
+     (u/gba/emit! `(add ,u/gba/scratch-addr ,u/gba/scratch-addr ,offset)))
+    ((integerp offset)
+     (u/gba/emit!
+      (u/gba/constant u/gba/scratch offset)
+      `(add ,u/gba/scratch-addr ,u/gba/scratch-addr ,u/gba/scratch))))))
 
-(defun u/gba/setvar16 (symtab sym x) ;; NOTE: This will not work properly in VRAM
-  "Generate code setting the memory at SYM in SYMTAB to X.
-X is either a register name or a constant."
+(defun u/gba/scratch-loc (symtab loc)
+  "Place the address/offset pair LOC from SYMTAB in the scratch address."
   (let*
-      ((entry (or (u/symtab-lookup symtab sym) (error "Failed to find symbol: %s" sym)))
+      ((sym (cond
+             ((u/gba/assemble-reg loc) loc)
+             ((keywordp loc) loc)
+             ((and (consp loc) (keywordp (car loc))) (car loc))
+             (t (error "Malformed symbol: %s" loc))))
+       (offset (if (consp loc) (cdr loc) nil))
+       (entry (or (u/symtab-lookup symtab sym) (error "Failed to find symbol: %s" sym)))
        (addr (u/symtab-entry-addr entry)))
     (u/gba/gen
-     (u/gba/emit! (u/gba/constant u/gba/scratch-addr addr))
-     (let
-         ((reg
-           (cond
-            ((u/gba/assemble-reg x)
-             x)
-            ((integerp x)
-             (u/gba/emit! (u/gba/constant u/gba/scratch (logand #xffff x)))
-             u/gba/scratch)
-            (t (error "Don't know how to write value: %s" x)))))
+     (cond
+      ((u/gba/assemble-reg loc)
+       (u/gba/scratch-reg-offset loc offset))
+      ((u/gba/assemble-reg offset)
        (u/gba/emit!
-        `(strh ,reg ,u/gba/scratch-addr)
-        )))))
+        (u/gba/constant u/gba/scratch-addr offset)
+        `(add u/gba/scratch-addr u/gba/scratch-addr ,offset)))
+      ((integerp offset)
+       (u/gba/emit! (u/gba/constant u/gba/scratch-addr (+ addr offset))))
+      ((null offset)
+       (u/gba/emit! (u/gba/constant u/gba/scratch-addr addr)))
+      (t (error "Don't know how to add offset: %s" offset))))))
 
-(defun u/gba/setvar32 (symtab sym x)
-  "Generate code setting the memory at SYM in SYMTAB to X.
+(defun u/gba/get8 (symtab reg loc)
+  "Generate code reading the memory at LOC in SYMTAB to REG."
+  (u/gba/gen
+   (u/gba/emit!
+    (u/gba/scratch-loc symtab loc)
+    `(ldr byte ,reg ,u/gba/scratch-addr))))
+
+(defun u/gba/get16 (symtab reg loc)
+  "Generate code reading the memory at LOC in SYMTAB to REG."
+  (u/gba/gen
+   (u/gba/emit!
+    (u/gba/scratch-loc symtab loc)
+    `(ldrh ,reg ,u/gba/scratch-addr))))
+
+(defun u/gba/get32 (symtab reg loc)
+  "Generate code reading the memory at LOC in SYMTAB to REG."
+  (u/gba/gen
+   (u/gba/emit!
+    (u/gba/scratch-loc symtab loc)
+    `(ldr ,reg ,u/gba/scratch-addr))))
+
+(defun u/gba/set8 (symtab loc x) ;; NOTE: This will not work properly in VRAM
+  "Generate code setting the memory at LOC in SYMTAB to X.
 X is either a register name or a constant."
-  (let*
-      ((entry (or (u/symtab-lookup symtab sym) (error "Failed to find symbol: %s" sym)))
-       (addr (u/symtab-entry-addr entry)))
-    (u/gba/gen
-     (u/gba/emit! (u/gba/constant u/gba/scratch-addr addr))
-     (let
-         ((reg
-           (cond
-            ((u/gba/assemble-reg x)
-             x)
-            ((integerp x)
-             (u/gba/emit! (u/gba/constant u/gba/scratch x))
-             u/gba/scratch)
-            (t (error "Don't know how to write value: %s" x)))))
-       (u/gba/emit! `(str ,reg ,u/gba/scratch-addr))))))
+  (u/gba/gen
+   (u/gba/emit! (u/gba/scratch-loc symtab loc))
+   (let
+       ((reg
+         (cond
+          ((u/gba/assemble-reg x)
+           x)
+          ((integerp x)
+           (u/gba/emit! `(mov ,u/gba/scratch ,(logand #x000000ff x)))
+           u/gba/scratch)
+          (t (error "Don't know how to write value: %s" x)))))
+     (u/gba/emit! `(str byte ,reg ,u/gba/scratch-addr)))))
+
+(defun u/gba/set16 (symtab loc x) ;; NOTE: This will not work properly in VRAM
+  "Generate code setting the memory at LOC in SYMTAB to X.
+X is either a register name or a constant."
+  (u/gba/gen
+   (u/gba/emit! (u/gba/scratch-loc symtab loc))
+   (let
+       ((reg
+         (cond
+          ((u/gba/assemble-reg x)
+           x)
+          ((integerp x)
+           (u/gba/emit! (u/gba/constant u/gba/scratch (logand #xffff x)))
+           u/gba/scratch)
+          (t (error "Don't know how to write value: %s" x)))))
+     (u/gba/emit!
+      `(strh ,reg ,u/gba/scratch-addr)
+      ))))
+
+(defun u/gba/set32 (symtab loc x)
+  "Generate code setting the memory at LOC in SYMTAB to X.
+X is either a register name or a constant."
+  (u/gba/gen
+   (u/gba/emit! (u/gba/scratch-loc symtab loc))
+   (let
+       ((reg
+         (cond
+          ((u/gba/assemble-reg x)
+           x)
+          ((integerp x)
+           (u/gba/emit! (u/gba/constant u/gba/scratch x))
+           u/gba/scratch)
+          (t (error "Don't know how to write value: %s" x)))))
+     (u/gba/emit! `(str ,reg ,u/gba/scratch-addr)))))
 
 (defun u/gba/write-struct (r st &rest fields)
   "Given a `u/structdef' ST, write FIELDS to the address in R."

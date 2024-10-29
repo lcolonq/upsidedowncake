@@ -14,6 +14,15 @@ the 16-bit display control register lives at 0x04000000
 - bit 13 enables use of window 0 (idk)
 - bit 14 enables use of window 1 (idk)
 - bit 15 enables use of object window (idk)
+* display status
+the 16-bit display status register lives at 0x04000004
+- bit 0 is read-only, set high during vblank
+- bit 1 is read-only, set high during hblank
+- bit 2 is read-only, set if the current scanline matches bits 8-15
+- bit 3 is the vblank interrupt request. if set, an interrupt will occur at vblank
+- bit 4 is the hblank interrupt request
+- bit 5 is the vcount interrupt request
+- bits 8-15 are the vcount trigger value
 * palette - 512 bytes
 a big array of 256 16-bit colors
 each color has 5 bits for each R, G, and B component and one unused bit
@@ -23,7 +32,7 @@ tiles are 8x8, and either 4 bits/pixel or 8 bits/pixel
 so they are either 32 or 64 bytes long, and you can fit either 512 or 256 tiles to a charblock
 * screenblock - 2048 bytes (1024 screen entries)
 screenblocks are background tilemaps
-they are composed of 16-bit "screen entries" (and so therefore y.
+they are composed of 16-bit "screen entries"
 screen entries look like the following:
 - bits 0-9 are a tile index
 - bit 10 is flag to horizontally flip the tile
