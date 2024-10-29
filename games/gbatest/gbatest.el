@@ -13,20 +13,14 @@
   g/palette
   (u/gba/make-palette
    :colors
-   '((0 0 0)
-     (63 63 63)
-     (127 127 127)
-     (191 191 191)
-     (255 255 255)
-     (63 0 0)
-     (127 0 0)
-     (255 0 0)
-     (0 63 0)
-     (0 127 0)
-     (0 255 0)
-     (0 0 63)
-     (0 0 127)
-     (0 0 255)
+   '((#x08 #x14 #x1e)
+     (#x0f #x2a #x3f)
+     (#x20 #x39 #x4f)
+     (#xf6 #xd6 #xbd)
+     (#xc3 #xa3 #x8a)
+     (#x99 #x75 #x77)
+     (#x81 #x62 #x71)
+     (#x4e #x49 #x5f)
      )))
 
 (defconst g/image (u/gba/image-tiles (u/gba/image-quantize-palette g/palette) (u/load-image-ff "~/src/upsidedowncake/assets/test.ff")))
