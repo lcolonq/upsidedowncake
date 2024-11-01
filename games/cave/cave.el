@@ -1,4 +1,4 @@
-;;; gbatest --- Game Boy Advance testing -*- lexical-binding: t; -*-
+;;; cave --- A simple Game Boy Advance game -*- lexical-binding: t; -*-
 ;;; Commentary:
 ;;; Code:
 ;;;; Library imports
@@ -6,6 +6,7 @@
 (require 'ht)
 (require 'f)
 (add-to-list 'load-path (f-canonical "../.."))
+(add-to-list 'load-path (f-canonical "../../src"))
 (setq elisp-flymake-byte-compile-load-path load-path)
 (require 'udc)
 
@@ -73,10 +74,12 @@
 (u/symtab-add-entry! g/symtab :vram-bg-screenblock31 (u/make-symtab-entry :addr #x0600f800 :type 'var :data 2048))
 
 (u/symtab-add-entry! g/symtab :vram-sprite (u/make-symtab-entry :addr #x06010000 :type 'var :data (* 32 1024)))
+(u/symtab-add-entry! g/symtab :vram-sprite-charblock0 (u/make-symtab-entry :addr #x06010000 :type 'var :data 16384))
 
 (u/symtab-add-entry! g/symtab :oam (u/make-symtab-entry :addr #x07000000 :type 'var :data 1024))
 
 ;;;; Data structures
+(defconst g/map-dim 20)
 (defconst
   g/struct-playerdata
   (u/struct
@@ -87,12 +90,11 @@
    :padding 1
    :big 4
    ))
-
 (defconst
   g/struct-room-layout
   (u/struct
    4
-   :terrain (* 20 20)))
+   :terrain (* g/map-dim g/map-dim)))
 
 (defconst
   g/struct-room
@@ -100,12 +102,55 @@
    4
    :layout g/struct-room-layout))
 
+(defun g/tile-from-char (c)
+  "Convert the character C into a tile index."
+  (cl-case c
+    (?. 0)
+    (?# 2)
+    (?@ 3)
+    (t 0)))
+
+(defun g/room-from-string (str)
+  "Convert the string STR into a room."
+  (let* ((trimmed (s-join "" (s-split "\n" (s-trim str))))
+         (chars (seq-into trimmed 'list))
+         (clen (length chars))
+         (rlen (* g/map-dim g/map-dim))
+         )
+    (unless (= clen rlen)
+      (error "Failed to build room from string: length was %s rather than %s" clen rlen))
+    (-map #'g/tile-from-char chars)))
+
+(defconst g/room-test
+  (g/room-from-string "
+....................
+....................
+....................
+....@........@......
+....................
+....#........#......
+....##########......
+....................
+......@@@...........
+....................
+..#....#.....#......
+..#....#.....#......
+..#....#.....#......
+..#....#.....#......
+..######.....#......
+..#....#.....#......
+..#....#.....#......
+..#....#.....#......
+..#....#.....#......
+....................
+"))
+
 ;;;; Assets
 (defconst
   g/palette
   (u/gba/make-palette
    :colors
-   '((#xff #x00 #xe7)
+   '((#xff #x00 #xe7) ;; transparency
      (#x08 #x14 #x1e) ;; normal nyx8 palette
      (#x0f #x2a #x3f)
      (#x20 #x39 #x4f)
@@ -117,11 +162,23 @@
      (#x27 #xbf #x03) ;; special green highlight
      )))
 
-(defvar g/image-source-cave (u/load-image-ff "./assets/cave.ff"))
-(defconst g/image-cave
-  (u/gba/image-tiles (u/gba/image-quantize-palette-exact g/palette) g/image-source-cave))
-(defconst g/image-cave-tiledata-bytes
-  (--mapcat (u/gba/tile-s-bytes it) (u/gba/image-tiledata g/image-cave)))
+(defconst
+  g/palette-sprite
+  (u/gba/make-palette
+   :colors
+   '((#xff #x00 #xe7) ;; transparency
+     (#xff #xff #xff)
+     (#x00 #x00 #x00)
+     (#xff #x00 #x00)
+     (#x00 #xff #x00)
+     (#x00 #x00 #xff)
+     (#xaf #xaf #xaf)
+     (#x5a #x5a #x5a)
+     (#x32 #x32 #x32)
+     (#xaf #x4a #x4a)
+     (#x72 #xc7 #x70)
+     (#x76 #x73 #xd2)
+     )))
 
 (defvar g/image-source-ui (u/load-image-ff "./assets/ui.ff"))
 (defconst g/image-ui
@@ -133,11 +190,30 @@
    (list (cdr it) 0)
    (u/gba/image-cell-indices g/image-ui)))
 
+(defvar g/image-source-cave (u/load-image-ff "./assets/cave.ff"))
+(defconst g/image-cave
+  (u/gba/image-tiles (u/gba/image-quantize-palette-exact g/palette) g/image-source-cave))
+(defconst g/image-cave-tiledata-bytes
+  (--mapcat (u/gba/tile-s-bytes it) (u/gba/image-tiledata g/image-cave)))
+
+(defvar g/image-source-player (u/load-image-ff "./assets/player.ff"))
+(defconst g/image-player
+  (u/gba/image-tiles (u/gba/image-quantize-palette-exact g/palette-sprite) g/image-source-player))
+(defconst g/image-player-tiledata-bytes
+  (--mapcat (u/gba/tile-s-bytes it) (u/gba/image-tiledata g/image-player)))
+
+(defconst g/image-sprite-tiledata-bytes
+  (-concat
+   g/image-player-tiledata-bytes))
+
 ;;;; Constants in ROM
 (u/symtab-add! g/symtab :data :data-palette 'bytes (u/gba/palette-bytes g/palette))
+(u/symtab-add! g/symtab :data :data-palette-sprite 'bytes (u/gba/palette-bytes g/palette-sprite))
 (u/symtab-add! g/symtab :data :data-tiles-ui 'bytes g/image-ui-tiledata-bytes)
 (u/symtab-add! g/symtab :data :data-tiles-cave 'bytes g/image-cave-tiledata-bytes)
+(u/symtab-add! g/symtab :data :data-tiles-sprite 'bytes g/image-sprite-tiledata-bytes)
 (u/symtab-add! g/symtab :data :data-screenblock-ui 'bytes g/image-ui-screenblock-bytes)
+(u/symtab-add! g/symtab :data :data-room-test 'bytes g/room-test)
 
 ;;;; Variables in RAM
 (u/symtab-add! g/symtab :vars :var-test0 'var 4)
@@ -188,7 +264,7 @@
 
    ;; load palette into sprite palette
    '(mov r1 8)
-   (u/gba/addr 'r2 g/symtab :data-palette)
+   (u/gba/addr 'r2 g/symtab :data-palette-sprite)
    (u/gba/addr 'r3 g/symtab :palette-sprite)
    '(bl :wordcopy)
 
@@ -204,14 +280,17 @@
    (u/gba/addr 'r3 g/symtab :vram-bg-charblock1)
    '(bl :wordcopy)
 
-   ;; write tile index to screenblock
+   ;; write ui tile indices to screenblock 30
    (u/gba/constant 'r1 (/ (length g/image-ui-screenblock-bytes) u/gba/size-word))
    (u/gba/addr 'r2 g/symtab :data-screenblock-ui)
    (u/gba/addr 'r3 g/symtab :vram-bg-screenblock30)
    '(bl :wordcopy)
 
-   ;; write some data to sprite charblock 0
-   (u/gba/set32 g/symtab :vram-sprite #xDDDDDDDD)
+   ;; load sprite tile data into sprite charblock 0
+   `(mov r1 ,(/ (length g/image-sprite-tiledata-bytes) u/gba/size-word))
+   (u/gba/addr 'r2 g/symtab :data-tiles-sprite)
+   (u/gba/addr 'r3 g/symtab :vram-sprite-charblock0)
+   '(bl :wordcopy)
 
    ;; set video mode
    (u/gba/set16 g/symtab :reg-dispcnt #b0001001100000000) ;; turn on BG0, BG1, and sprites, mode 0
@@ -222,6 +301,10 @@
 
    (u/gba/set16 g/symtab '(:vram-bg-screenblock31 . 12) 1)
    (u/gba/set16 g/symtab '(:vram-bg-screenblock31 . 16) 2)
+   (u/gba/set16 g/symtab '(:vram-bg-screenblock31 . 24) 2)
+
+   (u/gba/addr 'r1 g/symtab :data-room-test)
+   '(bl :render-room)
 
    '(b :enable-interrupts))))
 
@@ -243,16 +326,24 @@
  :code :mainloop 'code
  (u/gba/gen
   (u/gba/emit!
-   `(swi ,(lsh #x05 16)) ;; VBlankIntrWait BIOS function, remember to shift in ARM!
-
-   ;; set sprite 0 position in OAM
+   ;; update state
    '(add r7 r7 1)
    '(and r7 r7 #x3f)
-   (u/gba/addr 'r0 g/symtab :oam)
-   '(mov r1 r7)
-   '(mov r1 r1 (lsl 16))
-   '(orr r1 r1 r7)
-   '(str r1 r0)
+
+   `(swi ,(lsh #x05 16)) ;; VBlankIntrWait BIOS function, remember to shift in ARM!
+   ;; "render" / update vram
+
+   (u/gba/constant 'r6 #b1000000000000000)
+   '(orr r6 r6 r7)
+   (u/gba/set16 g/symtab :oam 'r6)
+   (u/gba/set16 g/symtab '(:oam . 2) 'r7)
+
+   ;; set sprite 0 position in OAM
+   ;; (u/gba/addr 'r0 g/symtab :oam)
+   ;; '(mov r1 r7)
+   ;; '(mov r1 r1 (lsl 16))
+   ;; '(orr r1 r1 r7)
+   ;; '(str r1 r0)
 
    '(b :mainloop))))
 
@@ -278,6 +369,27 @@
  :code :render-room 'code
  (u/gba/gen ;; room address in r1
   (u/gba/function-header)
+  (u/gba/emit!
+   `(add r1 r1 ,(u/offsetof g/struct-room :layout)) ;; r1 holds layout address
+   `(add r1 r1 ,(u/offsetof g/struct-room-layout :terrain)) ;; r1 holds terrain address
+   '(mov r2 19) ;; y offset
+   :loop-start-y
+   '(mov r3 19) ;; x offset
+   :loop-start-x
+   `(mov r7 ,g/map-dim)
+   '(mul r7 r7 r2)
+   '(add r7 r7 r3)
+   (u/gba/get8 g/symtab 'r8 '(r1 . r7))
+   '(mov r7 32)
+   '(mul r7 r7 r2)
+   '(add r7 r7 r3)
+   '(add r7 r7 5)
+   '(mov r7 r7 (lsl 1))
+   (u/gba/set16 g/symtab '(:vram-bg-screenblock31 . r7) 'r8)
+   '(sub s r3 r3 1)
+   '(b ge :loop-start-x)
+   '(sub s r2 r2 1)
+   '(b ge :loop-start-y))
   (u/gba/function-footer)))
 
 ;;;; Link and emit ROM
@@ -295,7 +407,7 @@
    g/linked
    'string))
 
-(f-write-bytes g/rom "test.gba")
+(f-write-bytes g/rom "cave.gba")
 
-(provide 'gbatest)
-;;; gbatest.el ends here
+(provide 'cave)
+;;; cave.el ends here

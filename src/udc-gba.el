@@ -361,6 +361,7 @@ INS is either:
           (b (u/gba/assemble-ins-branch cond nil dimm))
           (bic (u/gba/assemble-ins-dataprocessing cond 'bic set-cond a0 d a1 a2))
           (bl (u/gba/assemble-ins-branch cond t dimm))
+          (brk (u/split32le (logior (lsh (u/gba/assemble-cond cond) 28) (lsh #b011 25) (lsh #b1 4))))
           (bx (u/gba/assemble-ins-branchexchange cond d))
           (cdp (error "Unsupported instruction: %s" ins))
           (cmn (u/gba/assemble-ins-dataprocessing cond 'cmn set-cond a0 d a1 a2))
@@ -719,27 +720,30 @@ QUANTIZE should be a function that converts an RBG pixel to a 4-bit color index.
 (defun u/gba/scratch-loc (symtab loc)
   "Place the address/offset pair LOC from SYMTAB in the scratch address."
   (let*
-      ((sym (cond
+      ((isreg (or (u/gba/assemble-reg loc) (and (consp loc) (u/gba/assemble-reg (car loc)))))
+       (sym (cond
              ((u/gba/assemble-reg loc) loc)
+             ((and (consp loc) (u/gba/assemble-reg (car loc))) (car loc))
              ((keywordp loc) loc)
              ((and (consp loc) (keywordp (car loc))) (car loc))
              (t (error "Malformed symbol: %s" loc))))
-       (offset (if (consp loc) (cdr loc) nil))
-       (entry (or (u/symtab-lookup symtab sym) (error "Failed to find symbol: %s" sym)))
-       (addr (u/symtab-entry-addr entry)))
+       (offset (if (consp loc) (cdr loc) nil)))
     (u/gba/gen
-     (cond
-      ((u/gba/assemble-reg loc)
-       (u/gba/scratch-reg-offset loc offset))
-      ((u/gba/assemble-reg offset)
-       (u/gba/emit!
-        (u/gba/constant u/gba/scratch-addr offset)
-        `(add u/gba/scratch-addr u/gba/scratch-addr ,offset)))
-      ((integerp offset)
-       (u/gba/emit! (u/gba/constant u/gba/scratch-addr (+ addr offset))))
-      ((null offset)
-       (u/gba/emit! (u/gba/constant u/gba/scratch-addr addr)))
-      (t (error "Don't know how to add offset: %s" offset))))))
+     (if isreg
+         (u/gba/emit! (u/gba/scratch-reg-offset sym offset))
+       (let*
+           ((entry (or (u/symtab-lookup symtab sym) (error "Failed to find symbol: %s" sym)))
+            (addr (u/symtab-entry-addr entry)))
+         (cond
+          ((u/gba/assemble-reg offset)
+           (u/gba/emit!
+            (u/gba/constant u/gba/scratch-addr addr)
+            `(add ,u/gba/scratch-addr ,u/gba/scratch-addr ,offset)))
+          ((integerp offset)
+           (u/gba/emit! (u/gba/constant u/gba/scratch-addr (+ addr offset))))
+          ((null offset)
+           (u/gba/emit! (u/gba/constant u/gba/scratch-addr addr)))
+          (t (error "Don't know how to add offset: %s" offset))))))))
 
 (defun u/gba/get8 (symtab reg loc)
   "Generate code reading the memory at LOC in SYMTAB to REG."
