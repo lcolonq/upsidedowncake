@@ -850,6 +850,35 @@ X is either a register name or a constant."
     (mov r1 r1 (lsr 8))
     (str byte r1 r0 1)))
 
+(defun u/gba/when-cond? (cond body)
+  "Run BODY if COND is set."
+  (u/gba/gen
+   (u/gba/emit!
+    `(b ,cond :end)
+    body
+    :end)))
+
+(defconst u/gba/button-masks
+  '((a . #b1)
+    (b . #b10)
+    (select . #b100)
+    (start . #b1000)
+    (right . #b10000)
+    (left . #b100000)
+    (up . #b1000000)
+    (down . #b10000000)
+    (r . #b100000000)
+    (l . #b1000000000)))
+(defun u/gba/button-pressed? (st button body)
+  "Run BODY if BUTTON is pressed in symbol table ST."
+  (let ((mask (alist-get button u/gba/button-masks)))
+    (u/gba/gen
+     (u/gba/emit!
+      (u/gba/get16 st u/gba/scratch :reg-keyinput)
+      (u/gba/constant u/gba/scratch-addr mask)
+      `(bic s ,u/gba/scratch ,u/gba/scratch-addr ,u/gba/scratch)
+      (u/gba/when-cond? 'eq body)))))
+
 (defun u/gba/test ()
   "Test function."
   (u/gba/gen ;; len in r1, src in r2, dst in r3
@@ -866,6 +895,79 @@ X is either a register name or a constant."
     )
    (u/gba/pop 'r4)
    (u/gba/function-footer)))
+
+(defun u/gba/compile-fold-binop (op)
+  "Return a function applying OP to many arguments."
+  (lambda (res &rest args)
+    (--each (cdr args)
+      (u/gba/emit! `((,op ,res ,res ,it))))))
+(defconst u/gba/compile-binops
+  (list
+   (cons '+ (u/gba/compile-fold-binop 'add))
+   (cons '* (u/gba/compile-fold-binop 'mul))
+   ))
+(defun u/gba/compile-expression-label-sethi-ullman (exp)
+  "Return the registers needed to evaluate EXP."
+  (cond
+   ((keywordp exp) (cons 1 exp))
+   ((symbolp exp) (cons 1 exp))
+   ((integerp exp) (cons 1 exp))
+   ((and (listp exp) (symbolp (car exp)))
+    (let* ((children (-map #'u/gba/compile-expression-label-sethi-ullman (cdr exp)))
+           (sorted (-sort (-on #'> #'car) children)))
+      (cons
+       (--reduce-from
+        (max (+ 1 (car it)) acc)
+        (caar sorted)
+        (cdr sorted))
+       (cons (car exp) children))))
+   (t (error "Unknown expression shape: %s" exp))))
+(defun u/gba/compile-expression-labeled-helper (regs lexp)
+  "Compile LEXP into assembly code using REGS and return the result register."
+  (let ((exp (cdr lexp)))
+    (cond
+     ((keywordp exp)
+      (let ((ret (car regs)))
+        (u/gba/emit! `((symbol ,ret ,exp)))
+        ret))
+     ((symbolp exp)
+      (let ((ret (car regs)))
+        (u/gba/emit! `((mov ,ret ,exp)))
+        ret))
+     ((integerp exp)
+      (let ((ret (car regs)))
+        (u/gba/emit! `((const ,ret ,exp)))
+        ret))
+     ((and (listp exp) (symbolp (car exp)))
+      (let* ((sorted (-sort (-on #'> #'car) (cdr exp)))
+             (args (ht-create))
+             (op
+              (or
+               (alist-get (car exp) u/gba/compile-binops)
+               (error "Invalid operator %s" (car exp))))
+             (_
+              (--reduce-from
+               (let ((res (u/gba/compile-expression-labeled-helper acc it)))
+                 (ht-set! args (cdr it) res)
+                 (remove res acc))
+               regs
+               sorted))
+             (rargs (--map (ht-get args (cdr it)) (cdr exp))))
+        (u/gba/emit! (apply op (car rargs) rargs))
+        (car rargs))))))
+(defun u/gba/compile-expression-labeled (regs lexp)
+  "Compile LEXP into assembly code using REGS and return the result register."
+  (u/gba/gen
+   (u/gba/compile-expression-labeled-helper regs lexp)))
+(defun u/gba/compile-expression (symtab regs exp)
+  "Compile EXP into assembly code using REGS and SYMTAB."
+  (u/gba/gen
+   (--each (u/gba/compile-expression-labeled regs (u/gba/compile-expression-label-sethi-ullman exp))
+     (u/gba/emit!
+      (cl-case (car it)
+        (symbol (u/gba/addr (cadr it) symtab (caddr it)))
+        (const (u/gba/constant (cadr it) (caddr it)))
+        (t it))))))
 
 (provide 'udc-gba)
 ;;; udc-gba.el ends here
