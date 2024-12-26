@@ -16,8 +16,8 @@
 (defconst u/gba/lr 'r14)
 (defconst u/gba/sp 'r13)
 (defconst u/gba/fp 'r11)
-(defconst u/gba/scratch 'r4) ;; we designate r4 as our general-purpose scratch register (frequently clobbered)
-(defconst u/gba/scratch-addr 'r5)
+(defconst u/gba/regs-callee-saved '(r4 r5 r6 r7 r8 r9 r10))
+(defconst u/gba/regs-arg '(r0 r1 r2 r3))
 
 ;;;; The assembler proper
 (defun u/gba/assemble-ins-string-system (ins)
@@ -395,7 +395,7 @@ INS is either:
           (mrs (error "Unsupported instruction: %s" ins))
           (msr (error "Unsupported instruction: %s" ins))
           (mul (u/gba/assemble-ins-multiply cond nil set-cond d nil a1 a0))
-          (mvn (u/gba/assemble-ins-dataprocessing cond 'mvn set-cond a0 d a1 a2))
+          (mvn (u/gba/assemble-ins-dataprocessing cond 'mvn set-cond 'r0 d a0 a1))
           (orr (u/gba/assemble-ins-dataprocessing cond 'orr set-cond a0 d a1 a2))
           (rsb (u/gba/assemble-ins-dataprocessing cond 'rsb set-cond a0 d a1 a2))
           (rsc (u/gba/assemble-ins-dataprocessing cond 'rsc set-cond a0 d a1 a2))
@@ -521,6 +521,7 @@ SIZE is the length of the resulting vector."
 ;;;; Code generation blocks
 (defvar u/gba/codegen nil) ;; dynamically bound code generation context
 (cl-defstruct (u/gba/codegen (:constructor u/gba/make-codegen))
+  (regs-available nil) ;; list of registers that are available for us
   (frame-offset -8) ;; negative offset applied to frame pointer for next local
   (locals (ht-create)) ;; mapping from local variable symbols to frame offsets
   (instructions nil) ;; reversed list of generated instructions
@@ -538,6 +539,27 @@ SIZE is the length of the resulting vector."
          (- laboff insoff 1))
      it)
    ins))
+(defun u/gba/codegen-extract ()
+  "Extract the generated code from the current codegen context."
+  (--map-indexed
+   (u/gba/codegen-replace-local-labels it it-index)
+   (reverse (u/gba/codegen-instructions (u/gba/codegen)))))
+(defmacro u/gba/scope (&rest body)
+  "Run BODY in a new code generation context and return the generated instructions."
+  `(let* ((u/gba/codegen
+           (u/gba/make-codegen
+            :regs-available (u/gba/codegen-regs-available (u/gba/codegen)))))
+     ,@body
+     (u/gba/codegen-extract)))
+(defmacro u/gba/function (&rest body)
+  "Run BODY in a new code generation context and return the generated instructions."
+  `(let* ((u/gba/codegen (u/gba/make-codegen :regs-available u/gba/regs-callee-saved)))
+     (u/gba/function-header)
+     (apply #'u/gba/push u/gba/regs-callee-saved)
+     ,@body
+     (apply #'u/gba/pop u/gba/regs-callee-saved)
+     (u/gba/function-footer)
+     (u/gba/codegen-extract)))
 (defun u/gba/emit! (&rest ins)
   "Emit INS to the current codegen context."
   (--each ins
@@ -552,16 +574,20 @@ SIZE is the length of the resulting vector."
       (push it (u/gba/codegen-instructions (u/gba/codegen))))
      (t
       (error "Emitted malformed instruction: %s" it)))))
-(defun u/gba/codegen-extract ()
-  "Extract the generated code from the current codegen context."
-  (--map-indexed
-   (u/gba/codegen-replace-local-labels it it-index)
-   (reverse (u/gba/codegen-instructions (u/gba/codegen)))))
-(defmacro u/gba/gen (&rest body)
-  "Run BODY in a new code generation context and return the generated instructions."
-  `(let ((u/gba/codegen (u/gba/make-codegen)))
-     ,@body
-     (u/gba/codegen-extract)))
+(defun u/gba/fresh! ()
+  "Return a new register and mark it as unusable for the rest of the context."
+  (unless u/gba/codegen
+    (error "Attempted to obtain fresh register outside of code generation context"))
+  (unless (u/gba/codegen-regs-available u/gba/codegen)
+    (error "No more registers are available"))
+  (pop (u/gba/codegen-regs-available u/gba/codegen)))
+(defun u/gba/burn! (&rest rs)
+  "Mark registers RS as unusable for the rest of the current codegen context."
+  (let ((regs (u/gba/codegen-regs-available (u/gba/codegen))))
+  (--each rs
+    (if (-contains? regs it)
+        (delete it regs)
+      (error "Tried to burn unavailable register %s; currently available: %s" it regs)))))
 
 ;;;; Palettes and tilemaps
 (cl-defstruct (u/gba/palette (:constructor u/gba/make-palette))
@@ -692,7 +718,7 @@ QUANTIZE should be a function that converts an RBG pixel to a 4-bit color index.
   "Generate code loading the (maximum 32-bit CONSTANT) into R."
   (unless (integerp constant)
     (error "Attempt to generate bad constant: %s" constant))
-  (u/gba/gen
+  (u/gba/scope
    (u/gba/emit! `(mov ,r ,(logand #x000000ff constant)))
    (when (> constant #xff)
      (u/gba/emit! `(orr ,r ,r ,(lsh (logand #x0000ff00 constant) -8) 12)))
@@ -705,20 +731,22 @@ QUANTIZE should be a function that converts an RBG pixel to a 4-bit color index.
   "Generate code loading the address in SYMTAB for SYM into R."
   (u/gba/constant r (u/symtab-entry-addr (u/symtab-lookup symtab sym))))
 
-(defun u/gba/scratch-reg-offset (reg &optional offset)
-  "Move REG to the scratch address and add OFFSET."
-  (u/gba/gen
-   (u/gba/emit! `(mov ,u/gba/scratch-addr ,reg))
+(defun u/gba/add-offset (dest reg &optional offset)
+  "Move REG to DEST and add OFFSET."
+  (u/gba/scope
+   (u/gba/emit! `(mov ,dest ,reg))
    (cond
     ((u/gba/assemble-reg offset)
-     (u/gba/emit! `(add ,u/gba/scratch-addr ,u/gba/scratch-addr ,offset)))
+     (u/gba/emit! `(add ,dest ,dest ,offset)))
     ((integerp offset)
-     (u/gba/emit!
-      (u/gba/constant u/gba/scratch offset)
-      `(add ,u/gba/scratch-addr ,u/gba/scratch-addr ,u/gba/scratch))))))
+     (let ((tmp (u/gba/fresh!)))
+       (u/gba/emit!
+        (u/gba/constant tmp offset)
+        `(add ,dest ,dest ,tmp)))))))
 
-(defun u/gba/scratch-loc (symtab loc)
-  "Place the address/offset pair LOC from SYMTAB in the scratch address."
+(defun u/gba/loc (symtab loc)
+  "Place the address/offset pair LOC from SYMTAB in a fresh register.
+Return that register."
   (let*
       ((isreg (or (u/gba/assemble-reg loc) (and (consp loc) (u/gba/assemble-reg (car loc)))))
        (sym (cond
@@ -727,107 +755,106 @@ QUANTIZE should be a function that converts an RBG pixel to a 4-bit color index.
              ((keywordp loc) loc)
              ((and (consp loc) (keywordp (car loc))) (car loc))
              (t (error "Malformed symbol: %s" loc))))
-       (offset (if (consp loc) (cdr loc) nil)))
-    (u/gba/gen
-     (if isreg
-         (u/gba/emit! (u/gba/scratch-reg-offset sym offset))
-       (let*
-           ((entry (or (u/symtab-lookup symtab sym) (error "Failed to find symbol: %s" sym)))
-            (addr (u/symtab-entry-addr entry)))
-         (cond
-          ((u/gba/assemble-reg offset)
-           (u/gba/emit!
-            (u/gba/constant u/gba/scratch-addr addr)
-            `(add ,u/gba/scratch-addr ,u/gba/scratch-addr ,offset)))
-          ((integerp offset)
-           (u/gba/emit! (u/gba/constant u/gba/scratch-addr (+ addr offset))))
-          ((null offset)
-           (u/gba/emit! (u/gba/constant u/gba/scratch-addr addr)))
-          (t (error "Don't know how to add offset: %s" offset))))))))
+       (offset (if (consp loc) (cdr loc) nil))
+       (dest (u/gba/fresh!)))
+    (u/gba/emit!
+     (u/gba/scope
+      (if isreg
+          (u/gba/emit! (u/gba/add-offset dest sym offset))
+        (let*
+            ((entry (or (u/symtab-lookup symtab sym) (error "Failed to find symbol: %s" sym)))
+             (addr (u/symtab-entry-addr entry)))
+          (cond
+           ((u/gba/assemble-reg offset)
+            (u/gba/emit!
+             (u/gba/constant dest addr)
+             `(add ,dest ,dest ,offset)))
+           ((integerp offset)
+            (u/gba/emit! (u/gba/constant dest (+ addr offset))))
+           ((null offset)
+            (u/gba/emit! (u/gba/constant dest addr)))
+           (t (error "Don't know how to add offset: %s" offset)))))))
+    dest))
 
 (defun u/gba/get8 (symtab reg loc)
   "Generate code reading the memory at LOC in SYMTAB to REG."
-  (u/gba/gen
+  (u/gba/scope
    (u/gba/emit!
-    (u/gba/scratch-loc symtab loc)
-    `(ldr byte ,reg ,u/gba/scratch-addr))))
+    `(ldr byte ,reg ,(u/gba/loc symtab loc)))))
 
 (defun u/gba/get16 (symtab reg loc)
   "Generate code reading the memory at LOC in SYMTAB to REG."
-  (u/gba/gen
+  (u/gba/scope
    (u/gba/emit!
-    (u/gba/scratch-loc symtab loc)
-    `(ldrh ,reg ,u/gba/scratch-addr))))
+    `(ldrh ,reg ,(u/gba/loc symtab loc)))))
 
 (defun u/gba/get32 (symtab reg loc)
   "Generate code reading the memory at LOC in SYMTAB to REG."
-  (u/gba/gen
+  (u/gba/scope
    (u/gba/emit!
-    (u/gba/scratch-loc symtab loc)
-    `(ldr ,reg ,u/gba/scratch-addr))))
+    `(ldr ,reg ,(u/gba/loc symtab loc)))))
 
 (defun u/gba/set8 (symtab loc x) ;; NOTE: This will not work properly in VRAM
   "Generate code setting the memory at LOC in SYMTAB to X.
 X is either a register name or a constant."
-  (u/gba/gen
-   (u/gba/emit! (u/gba/scratch-loc symtab loc))
-   (let
-       ((reg
-         (cond
-          ((u/gba/assemble-reg x)
-           x)
-          ((integerp x)
-           (u/gba/emit! `(mov ,u/gba/scratch ,(logand #x000000ff x)))
-           u/gba/scratch)
-          (t (error "Don't know how to write value: %s" x)))))
-     (u/gba/emit! `(str byte ,reg ,u/gba/scratch-addr)))))
+  (u/gba/scope
+   (let ((reg
+          (cond
+           ((u/gba/assemble-reg x)
+            x)
+           ((integerp x)
+            (let ((r (u/gba/fresh!)))
+              (u/gba/emit! `(mov ,r ,(logand #x000000ff x)))
+              r))
+           (t (error "Don't know how to write value: %s" x)))))
+     (u/gba/emit! `(str byte ,reg ,(u/gba/loc symtab loc))))))
 
-(defun u/gba/set16 (symtab loc x) ;; NOTE: This will not work properly in VRAM
+(defun u/gba/set16 (symtab loc x)
   "Generate code setting the memory at LOC in SYMTAB to X.
 X is either a register name or a constant."
-  (u/gba/gen
-   (u/gba/emit! (u/gba/scratch-loc symtab loc))
+  (u/gba/scope
    (let
        ((reg
          (cond
           ((u/gba/assemble-reg x)
            x)
           ((integerp x)
-           (u/gba/emit! (u/gba/constant u/gba/scratch (logand #xffff x)))
-           u/gba/scratch)
+           (let ((r (u/gba/fresh!)))
+             (u/gba/emit! (u/gba/constant r (logand #xffff x)))
+             r))
           (t (error "Don't know how to write value: %s" x)))))
      (u/gba/emit!
-      `(strh ,reg ,u/gba/scratch-addr)
-      ))))
+      `(strh ,reg ,(u/gba/loc symtab loc))))))
 
 (defun u/gba/set32 (symtab loc x)
   "Generate code setting the memory at LOC in SYMTAB to X.
 X is either a register name or a constant."
-  (u/gba/gen
-   (u/gba/emit! (u/gba/scratch-loc symtab loc))
+  (u/gba/scope
    (let
        ((reg
          (cond
           ((u/gba/assemble-reg x)
            x)
           ((integerp x)
-           (u/gba/emit! (u/gba/constant u/gba/scratch x))
-           u/gba/scratch)
+           (let ((r (u/gba/fresh!)))
+             (u/gba/emit! (u/gba/constant r x))
+             r))
           (t (error "Don't know how to write value: %s" x)))))
-     (u/gba/emit! `(str ,reg ,u/gba/scratch-addr)))))
+     (u/gba/emit! `(str ,reg ,(u/gba/loc symtab loc))))))
 
 (defun u/gba/write-struct (r st &rest fields)
   "Given a `u/structdef' ST, write FIELDS to the address in R."
   (let ((field-offsets (-sort (-on #'< #'cdr) (ht->alist (u/structdef-fields st))))
         (prev 0))
-    (u/gba/gen
+    (u/gba/scope
      (--each field-offsets
        (when-let ((v (plist-get fields (car it))))
          (cond
           ((integerp v) ;; integer constant
            (u/gba/emit!
-            (u/gba/constant u/gba/scratch v)
-            `(str wb ,u/gba/scratch ,r ,(- (cdr it) prev))))
+            (let ((fr (u/gba/fresh!)))
+              (u/gba/constant fr v)
+              `(str wb ,fr ,r ,(- (cdr it) prev)))))
           ((symbolp v) ;; another register
            (u/gba/emit!
             `(str wb ,v ,r ,(- (cdr it) prev))))
@@ -852,7 +879,7 @@ X is either a register name or a constant."
 
 (defun u/gba/when-cond? (cond body)
   "Run BODY if COND is set."
-  (u/gba/gen
+  (u/gba/scope
    (u/gba/emit!
     `(b ,cond :end)
     body
@@ -872,16 +899,18 @@ X is either a register name or a constant."
 (defun u/gba/button-pressed? (st button body)
   "Run BODY if BUTTON is pressed in symbol table ST."
   (let ((mask (alist-get button u/gba/button-masks)))
-    (u/gba/gen
-     (u/gba/emit!
-      (u/gba/get16 st u/gba/scratch :reg-keyinput)
-      (u/gba/constant u/gba/scratch-addr mask)
-      `(bic s ,u/gba/scratch ,u/gba/scratch-addr ,u/gba/scratch)
-      (u/gba/when-cond? 'eq body)))))
+    (u/gba/scope
+     (let ((inpr (u/gba/fresh!))
+           (maskr (u/gba/fresh!)))
+       (u/gba/emit!
+        (u/gba/get16 st inpr :reg-keyinput)
+        (u/gba/constant maskr mask)
+        `(bic s ,inpr ,maskr ,inpr)
+        (u/gba/when-cond? 'eq body))))))
 
 (defun u/gba/test ()
   "Test function."
-  (u/gba/gen ;; len in r1, src in r2, dst in r3
+  (u/gba/scope ;; len in r1, src in r2, dst in r3
    (u/gba/function-header)
    (u/gba/push 'r4)
    (u/gba/emit!
@@ -896,16 +925,33 @@ X is either a register name or a constant."
    (u/gba/pop 'r4)
    (u/gba/function-footer)))
 
-(defun u/gba/compile-fold-binop (op)
-  "Return a function applying OP to many arguments."
-  (lambda (res &rest args)
-    (--each (cdr args)
-      (u/gba/emit! `((,op ,res ,res ,it))))))
-(defconst u/gba/compile-binops
-  (list
-   (cons '+ (u/gba/compile-fold-binop 'add))
-   (cons '* (u/gba/compile-fold-binop 'mul))
-   ))
+(defconst u/gba/compile-expression-handlers
+  '((+
+     . (lambda (ret o0 o1)
+         (unless (and o0 o1) (error "Operator + takes two arguments, was given: %s %s" o0 o1))
+         `((add ,ret ,o0 ,o1))))
+    (-
+     . (lambda (ret o0 o1)
+         (unless (and o0 o1) (error "Operator - takes two arguments, was given: %s %s" o0 o1))
+         `((sub ,ret ,o0 ,o1))))
+    (*
+     . (lambda (ret o0 o1)
+         (unless (and o0 o1) (error "Operator * takes two arguments, was given: %s %s" o0 o1))
+         `((mul ,ret ,o0 ,o1))))
+    (=
+     . (lambda (ret o0 o1)
+         (unless (and o0 o1) (error "Operator = takes two arguments, was given: %s %s" o0 o1))
+         `((sub ,ret ,o0 ,o1) (mvn ,ret ,ret))))
+    (@8
+     . (lambda (ret o0 _)
+         `((ldr byte ,ret ,o0))))
+    (@16
+     . (lambda (ret o0 _)
+         `((ldrh ,ret ,o0))))
+    (@32
+     . (lambda (ret o0 _)
+         `((ldr ,ret ,o0))))
+    ))
 (defun u/gba/compile-expression-label-sethi-ullman (exp)
   "Return the registers needed to evaluate EXP."
   (cond
@@ -926,6 +972,7 @@ X is either a register name or a constant."
   "Compile LEXP into assembly code using REGS and return the result register."
   (let ((exp (cdr lexp)))
     (cond
+     ((null exp) nil)
      ((keywordp exp)
       (let ((ret (car regs)))
         (u/gba/emit! `((symbol ,ret ,exp)))
@@ -939,35 +986,38 @@ X is either a register name or a constant."
         (u/gba/emit! `((const ,ret ,exp)))
         ret))
      ((and (listp exp) (symbolp (car exp)))
-      (let* ((sorted (-sort (-on #'> #'car) (cdr exp)))
-             (args (ht-create))
-             (op
-              (or
-               (alist-get (car exp) u/gba/compile-binops)
-               (error "Invalid operator %s" (car exp))))
-             (_
-              (--reduce-from
-               (let ((res (u/gba/compile-expression-labeled-helper acc it)))
-                 (ht-set! args (cdr it) res)
-                 (remove res acc))
-               regs
-               sorted))
-             (rargs (--map (ht-get args (cdr it)) (cdr exp))))
-        (u/gba/emit! (apply op (car rargs) rargs))
-        (car rargs))))))
+      (let ((ret (car regs))
+            (p0 (car (cadr exp)))
+            (p1 (car (caddr exp)))
+            (handler
+             (or
+              (alist-get (car exp) u/gba/compile-expression-handlers)
+              (error "Error: no handler found for operator %s" (car exp)))))
+        (if (and (numberp p0) (numberp p1) (> p1 p0))
+            (let ((o1 (u/gba/compile-expression-labeled-helper regs (caddr exp)))
+                  (o0 (u/gba/compile-expression-labeled-helper (cdr regs) (cadr exp))))
+              (u/gba/emit! (funcall handler ret o0 o1)))
+          (let ((o0 (u/gba/compile-expression-labeled-helper regs (cadr exp)))
+                (o1 (u/gba/compile-expression-labeled-helper (cdr regs) (caddr exp))))
+            (u/gba/emit! (funcall handler ret o0 o1))))
+        ret))
+     )))
 (defun u/gba/compile-expression-labeled (regs lexp)
   "Compile LEXP into assembly code using REGS and return the result register."
-  (u/gba/gen
+  (u/gba/scope
    (u/gba/compile-expression-labeled-helper regs lexp)))
 (defun u/gba/compile-expression (symtab regs exp)
   "Compile EXP into assembly code using REGS and SYMTAB."
-  (u/gba/gen
-   (--each (u/gba/compile-expression-labeled regs (u/gba/compile-expression-label-sethi-ullman exp))
-     (u/gba/emit!
-      (cl-case (car it)
-        (symbol (u/gba/addr (cadr it) symtab (caddr it)))
-        (const (u/gba/constant (cadr it) (caddr it)))
-        (t it))))))
+  (u/gba/scope
+   (let ((labeled (u/gba/compile-expression-label-sethi-ullman exp)))
+     (when (> (car labeled) (length regs))
+       (error "Expression needs %s registers to compile, but only %s are available" (car labeled) regs))
+     (--each (u/gba/compile-expression-labeled regs labeled)
+       (u/gba/emit!
+        (cl-case (car it)
+          (symbol (u/gba/addr (cadr it) symtab (caddr it)))
+          (const (u/gba/constant (cadr it) (caddr it)))
+          (t it)))))))
 
 (provide 'udc-gba)
 ;;; udc-gba.el ends here

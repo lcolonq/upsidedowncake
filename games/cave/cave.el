@@ -1,4 +1,5 @@
-;;; cave --- A simple Game Boy Advance game -*- lexical-binding: t; -*-
+;;; cave --- A simple Game Boy Advance game -*- lexical-binding: t;
+;;; byte-compile-warnings: (not suspicious); -*-
 ;;; Commentary:
 ;;; Code:
 ;;;; Library imports
@@ -235,7 +236,7 @@
 (u/symtab-add!
  g/symtab
  :code :interrupt-handler 'code
- (u/gba/gen
+ (u/gba/gen ;; TODO: think about this
   (u/gba/emit!
    '(mov r0 1) ;; vblank
    (u/gba/set16 g/symtab :reg-if 'r0)
@@ -330,6 +331,7 @@
    (u/gba/set8 g/symtab `(:var-player . ,(u/offsetof g/struct-playerdata :jump)) 0)
    (u/gba/set32 g/symtab `(:var-player . ,(u/offsetof g/struct-playerdata :vx)) 0)
    '(mov r7 0)
+   (u/gba/set32 g/symtab :var-test0 0)
    '(b :mainloop))))
 
 (u/symtab-add!
@@ -337,6 +339,13 @@
  :code :mainloop 'code
  (u/gba/gen
   (u/gba/emit!
+   '(mov r7 3)
+
+   (u/gba/compile-expression
+    g/symtab '(r0 r1 r2)
+    '(* r7 (+ 1 (@8 :var-test0))))
+
+   (u/gba/set8 g/symtab :var-test0 'r0)
    ;; update state
    '(bl :update-player)
 
@@ -557,7 +566,7 @@
 ;;;; Link and emit ROM
 ;; populate autocomple for symbol names in debugger
 (setq
- colonq/c-gdb-symbols
+ c/c-gdb-symbols
  (--map
   (cons (format "%s" (car it)) (format "0x%x" (u/symtab-entry-addr (cdr it))))
   (ht->alist (u/symtab-symbols g/symtab))))
