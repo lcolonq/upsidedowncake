@@ -18,6 +18,7 @@
 (defconst u/gba/fp 'r11)
 (defconst u/gba/regs-callee-saved '(r4 r5 r6 r7 r8 r9 r10))
 (defconst u/gba/regs-arg '(r0 r1 r2 r3))
+(defconst u/gba/regs-all '(r0 r1 r2 r3 r4 r5 r6 r7 r8 r9 r10))
 
 ;;;; The assembler proper
 (defun u/gba/assemble-ins-string-system (ins)
@@ -445,6 +446,69 @@ INS is either:
      (u/gba/assemble-ins ins)
      (u/gba/assemble-ins-string-system render))))
 
+;;;; Known addresses in most symbol tables
+(defun u/gba/make-symtab ()
+  (let ((symtab (u/make-symtab :alignment 4)))
+    (u/symtab-add-entry! symtab :reg-ifbios (u/make-symtab-entry :addr #x03007ff8 :type 'var :data 2))
+    (u/symtab-add-entry! symtab :reg-intaddr (u/make-symtab-entry :addr #x03007ffc :type 'var :data 4))
+
+    (u/symtab-add-entry! symtab :reg-dispcnt (u/make-symtab-entry :addr #x04000000 :type 'var :data 2))
+    (u/symtab-add-entry! symtab :reg-dispstat (u/make-symtab-entry :addr #x04000004 :type 'var :data 2))
+    (u/symtab-add-entry! symtab :reg-bg0cnt (u/make-symtab-entry :addr #x04000008 :type 'var :data 2))
+    (u/symtab-add-entry! symtab :reg-bg1cnt (u/make-symtab-entry :addr #x0400000a :type 'var :data 2))
+    (u/symtab-add-entry! symtab :reg-keyinput (u/make-symtab-entry :addr #x04000130 :type 'var :data 2))
+    (u/symtab-add-entry! symtab :reg-ie (u/make-symtab-entry :addr #x04000200 :type 'var :data 2))
+    (u/symtab-add-entry! symtab :reg-if (u/make-symtab-entry :addr #x04000202 :type 'var :data 2))
+    (u/symtab-add-entry! symtab :reg-ime (u/make-symtab-entry :addr #x04000208 :type 'var :data 1))
+    (u/symtab-add-entry! symtab :palette-bg (u/make-symtab-entry :addr #x05000000 :type 'var :data 512))
+    (u/symtab-add-entry! symtab :palette-sprite (u/make-symtab-entry :addr #x05000200 :type 'var :data 512))
+
+    (u/symtab-add-entry! symtab :vram-bg (u/make-symtab-entry :addr #x06000000 :type 'var :data (* 64 1024)))
+    (u/symtab-add-entry! symtab :vram-bg-charblock0 (u/make-symtab-entry :addr #x06000000 :type 'var :data 16384))
+    (u/symtab-add-entry! symtab :vram-bg-screenblock0  (u/make-symtab-entry :addr #x06000000 :type 'var :data 2048))
+    (u/symtab-add-entry! symtab :vram-bg-screenblock1  (u/make-symtab-entry :addr #x06000800 :type 'var :data 2048))
+    (u/symtab-add-entry! symtab :vram-bg-screenblock2  (u/make-symtab-entry :addr #x06001000 :type 'var :data 2048))
+    (u/symtab-add-entry! symtab :vram-bg-screenblock3  (u/make-symtab-entry :addr #x06001800 :type 'var :data 2048))
+    (u/symtab-add-entry! symtab :vram-bg-screenblock4  (u/make-symtab-entry :addr #x06002000 :type 'var :data 2048))
+    (u/symtab-add-entry! symtab :vram-bg-screenblock5  (u/make-symtab-entry :addr #x06002800 :type 'var :data 2048))
+    (u/symtab-add-entry! symtab :vram-bg-screenblock6  (u/make-symtab-entry :addr #x06003000 :type 'var :data 2048))
+    (u/symtab-add-entry! symtab :vram-bg-screenblock7  (u/make-symtab-entry :addr #x06003800 :type 'var :data 2048))
+
+    (u/symtab-add-entry! symtab :vram-bg-charblock1  (u/make-symtab-entry :addr #x06004000 :type 'var :data 16384))
+    (u/symtab-add-entry! symtab :vram-bg-screenblock8  (u/make-symtab-entry :addr #x06004000 :type 'var :data 2048))
+    (u/symtab-add-entry! symtab :vram-bg-screenblock9  (u/make-symtab-entry :addr #x06004800 :type 'var :data 2048))
+    (u/symtab-add-entry! symtab :vram-bg-screenblock10 (u/make-symtab-entry :addr #x06005000 :type 'var :data 2048))
+    (u/symtab-add-entry! symtab :vram-bg-screenblock11 (u/make-symtab-entry :addr #x06005800 :type 'var :data 2048))
+    (u/symtab-add-entry! symtab :vram-bg-screenblock12 (u/make-symtab-entry :addr #x06006000 :type 'var :data 2048))
+    (u/symtab-add-entry! symtab :vram-bg-screenblock13 (u/make-symtab-entry :addr #x06006800 :type 'var :data 2048))
+    (u/symtab-add-entry! symtab :vram-bg-screenblock14 (u/make-symtab-entry :addr #x06007000 :type 'var :data 2048))
+    (u/symtab-add-entry! symtab :vram-bg-screenblock15 (u/make-symtab-entry :addr #x06007800 :type 'var :data 2048))
+
+    (u/symtab-add-entry! symtab :vram-bg-charblock2  (u/make-symtab-entry :addr #x06008000 :type 'var :data 16384))
+    (u/symtab-add-entry! symtab :vram-bg-screenblock16 (u/make-symtab-entry :addr #x06008000 :type 'var :data 2048))
+    (u/symtab-add-entry! symtab :vram-bg-screenblock17 (u/make-symtab-entry :addr #x06008800 :type 'var :data 2048))
+    (u/symtab-add-entry! symtab :vram-bg-screenblock18 (u/make-symtab-entry :addr #x06009000 :type 'var :data 2048))
+    (u/symtab-add-entry! symtab :vram-bg-screenblock19 (u/make-symtab-entry :addr #x06009800 :type 'var :data 2048))
+    (u/symtab-add-entry! symtab :vram-bg-screenblock20 (u/make-symtab-entry :addr #x0600a000 :type 'var :data 2048))
+    (u/symtab-add-entry! symtab :vram-bg-screenblock21 (u/make-symtab-entry :addr #x0600a800 :type 'var :data 2048))
+    (u/symtab-add-entry! symtab :vram-bg-screenblock22 (u/make-symtab-entry :addr #x0600b000 :type 'var :data 2048))
+    (u/symtab-add-entry! symtab :vram-bg-screenblock23 (u/make-symtab-entry :addr #x0600b800 :type 'var :data 2048))
+
+    (u/symtab-add-entry! symtab :vram-bg-charblock3  (u/make-symtab-entry :addr #x0600c000 :type 'var :data 16384))
+    (u/symtab-add-entry! symtab :vram-bg-screenblock24 (u/make-symtab-entry :addr #x0600c000 :type 'var :data 2048))
+    (u/symtab-add-entry! symtab :vram-bg-screenblock25 (u/make-symtab-entry :addr #x0600c800 :type 'var :data 2048))
+    (u/symtab-add-entry! symtab :vram-bg-screenblock26 (u/make-symtab-entry :addr #x0600d000 :type 'var :data 2048))
+    (u/symtab-add-entry! symtab :vram-bg-screenblock27 (u/make-symtab-entry :addr #x0600d800 :type 'var :data 2048))
+    (u/symtab-add-entry! symtab :vram-bg-screenblock28 (u/make-symtab-entry :addr #x0600e000 :type 'var :data 2048))
+    (u/symtab-add-entry! symtab :vram-bg-screenblock29 (u/make-symtab-entry :addr #x0600e800 :type 'var :data 2048))
+    (u/symtab-add-entry! symtab :vram-bg-screenblock30 (u/make-symtab-entry :addr #x0600f000 :type 'var :data 2048))
+    (u/symtab-add-entry! symtab :vram-bg-screenblock31 (u/make-symtab-entry :addr #x0600f800 :type 'var :data 2048))
+
+    (u/symtab-add-entry! symtab :vram-sprite (u/make-symtab-entry :addr #x06010000 :type 'var :data (* 32 1024)))
+    (u/symtab-add-entry! symtab :vram-sprite-charblock0 (u/make-symtab-entry :addr #x06010000 :type 'var :data 16384))
+
+    (u/symtab-add-entry! symtab :oam (u/make-symtab-entry :addr #x07000000 :type 'var :data 1024))
+    symtab))
 ;;;; Linker and header generation
 (defun u/gba/relocate-ins (symtab idx ins)
   "Replace all keywords in INS by looking up relative addresses in SYMTAB.
@@ -507,16 +571,16 @@ SIZE is the length of the resulting vector."
       `(b ,(or (u/symtab-lookup-relative symtab (/ addr 4) (u/gba/header-entry header)) -2)))
      (u/pad-to 156 '()) ;; nintendo logo
      (u/pad-to 12 (seq-into (s-upcase (u/gba/header-title header)) 'list)) ;; game title
-    (u/pad-to 4 (seq-into (s-upcase (u/gba/header-code header)) 'list)) ;; game code
-    (u/pad-to 2 (seq-into (s-upcase (u/gba/header-maker header)) 'list)) ;; maker code
-    '(#x96) ;; fixed value
-    '(#x00) ;; main unit code
-    '(#x00) ;; device type
-    (u/pad-to 7 '()) ;; reserved area
-    '(#x00) ;; software version
-    '(#x00) ;; header checksum
-    (u/pad-to 2 '()) ;; reserved area
-    )))
+     (u/pad-to 4 (seq-into (s-upcase (u/gba/header-code header)) 'list)) ;; game code
+     (u/pad-to 2 (seq-into (s-upcase (u/gba/header-maker header)) 'list)) ;; maker code
+     '(#x96) ;; fixed value
+     '(#x00) ;; main unit code
+     '(#x00) ;; device type
+     (u/pad-to 7 '()) ;; reserved area
+     '(#x00) ;; software version
+     '(#x00) ;; header checksum
+     (u/pad-to 2 '()) ;; reserved area
+     )))
 
 ;;;; Code generation blocks
 (defvar u/gba/codegen nil) ;; dynamically bound code generation context
@@ -544,15 +608,25 @@ SIZE is the length of the resulting vector."
   (--map-indexed
    (u/gba/codegen-replace-local-labels it it-index)
    (reverse (u/gba/codegen-instructions (u/gba/codegen)))))
+(defmacro u/gba/toplevel (&rest body)
+  "Run BODY in a new code generation context and return the generated instructions.
+No registers will be available."
+  `(let* ((u/gba/codegen
+           (u/gba/make-codegen)))
+     ,@body
+     (u/gba/codegen-extract)))
 (defmacro u/gba/scope (&rest body)
-  "Run BODY in a new code generation context and return the generated instructions."
+  "Run BODY in a new code generation context and return the generated instructions.
+Registers from the enclosing scope will be available."
   `(let* ((u/gba/codegen
            (u/gba/make-codegen
             :regs-available (u/gba/codegen-regs-available (u/gba/codegen)))))
      ,@body
      (u/gba/codegen-extract)))
 (defmacro u/gba/function (&rest body)
-  "Run BODY in a new code generation context and return the generated instructions."
+  "Run BODY in a new code generation context and return the generated instructions.
+The code will be wrapped in the function header and footer.
+Callee-saved registers will be available."
   `(let* ((u/gba/codegen (u/gba/make-codegen :regs-available u/gba/regs-callee-saved)))
      (u/gba/function-header)
      (apply #'u/gba/push u/gba/regs-callee-saved)
@@ -584,14 +658,19 @@ SIZE is the length of the resulting vector."
 (defun u/gba/burn! (&rest rs)
   "Mark registers RS as unusable for the rest of the current codegen context."
   (let ((regs (u/gba/codegen-regs-available (u/gba/codegen))))
+    (--each rs
+      (if (-contains? regs it)
+          (delete it regs)
+        (error "Tried to burn unavailable register %s; currently available: %s" it regs)))))
+(defun u/gba/claim! (&rest rs)
+  "Mark registers RS as usable in the current codegen context.
+This tells the system that it is ok to clobber those registers. Beware!"
   (--each rs
-    (if (-contains? regs it)
-        (delete it regs)
-      (error "Tried to burn unavailable register %s; currently available: %s" it regs)))))
+    (cl-pushnew it (u/gba/codegen-regs-available (u/gba/codegen)))))
 
 ;;;; Palettes and tilemaps
 (cl-defstruct (u/gba/palette (:constructor u/gba/make-palette))
- colors)
+  colors)
 
 (defun u/gba/palette-bytes (pal)
   "Given PAL, return the corresponding bytes."
@@ -733,16 +812,17 @@ QUANTIZE should be a function that converts an RBG pixel to a 4-bit color index.
 
 (defun u/gba/add-offset (dest reg &optional offset)
   "Move REG to DEST and add OFFSET."
-  (u/gba/scope
-   (u/gba/emit! `(mov ,dest ,reg))
-   (cond
-    ((u/gba/assemble-reg offset)
-     (u/gba/emit! `(add ,dest ,dest ,offset)))
-    ((integerp offset)
-     (let ((tmp (u/gba/fresh!)))
-       (u/gba/emit!
-        (u/gba/constant tmp offset)
-        `(add ,dest ,dest ,tmp)))))))
+  (u/gba/emit!
+   (u/gba/scope
+    (u/gba/emit! `(mov ,dest ,reg))
+    (cond
+     ((u/gba/assemble-reg offset)
+      (u/gba/emit! `(add ,dest ,dest ,offset)))
+     ((integerp offset)
+      (let ((tmp (u/gba/fresh!)))
+        (u/gba/emit!
+         (u/gba/constant tmp offset)
+        `(add ,dest ,dest ,tmp))))))))
 
 (defun u/gba/loc (symtab loc)
   "Place the address/offset pair LOC from SYMTAB in a fresh register.
@@ -760,7 +840,7 @@ Return that register."
     (u/gba/emit!
      (u/gba/scope
       (if isreg
-          (u/gba/emit! (u/gba/add-offset dest sym offset))
+          (u/gba/add-offset dest sym offset)
         (let*
             ((entry (or (u/symtab-lookup symtab sym) (error "Failed to find symbol: %s" sym)))
              (addr (u/symtab-entry-addr entry)))
@@ -778,112 +858,140 @@ Return that register."
 
 (defun u/gba/get8 (symtab reg loc)
   "Generate code reading the memory at LOC in SYMTAB to REG."
-  (u/gba/scope
-   (u/gba/emit!
-    `(ldr byte ,reg ,(u/gba/loc symtab loc)))))
+  (u/gba/emit!
+   (u/gba/scope
+    (u/gba/emit!
+     `(ldr byte ,reg ,(u/gba/loc symtab loc))))))
 
 (defun u/gba/get16 (symtab reg loc)
   "Generate code reading the memory at LOC in SYMTAB to REG."
-  (u/gba/scope
-   (u/gba/emit!
-    `(ldrh ,reg ,(u/gba/loc symtab loc)))))
+  (u/gba/emit!
+   (u/gba/scope
+    (u/gba/emit!
+     `(ldrh ,reg ,(u/gba/loc symtab loc))))))
 
 (defun u/gba/get32 (symtab reg loc)
   "Generate code reading the memory at LOC in SYMTAB to REG."
-  (u/gba/scope
-   (u/gba/emit!
-    `(ldr ,reg ,(u/gba/loc symtab loc)))))
+  (u/gba/emit!
+   (u/gba/scope
+    (u/gba/emit!
+     `(ldr ,reg ,(u/gba/loc symtab loc))))))
 
 (defun u/gba/set8 (symtab loc x) ;; NOTE: This will not work properly in VRAM
   "Generate code setting the memory at LOC in SYMTAB to X.
 X is either a register name or a constant."
-  (u/gba/scope
-   (let ((reg
+  (u/gba/emit!
+   (u/gba/scope
+    (let ((reg
+           (cond
+            ((u/gba/assemble-reg x)
+             x)
+            ((integerp x)
+             (let ((r (u/gba/fresh!)))
+               (u/gba/emit! `(mov ,r ,(logand #x000000ff x)))
+               r))
+            (t (error "Don't know how to write value: %s" x)))))
+      (u/gba/emit! `(str byte ,reg ,(u/gba/loc symtab loc)))))))
+
+(defun u/gba/set16 (symtab loc x)
+  "Generate code setting the memory at LOC in SYMTAB to X.
+X is either a register name or a constant."
+  (u/gba/emit!
+   (u/gba/scope
+    (let
+        ((reg
           (cond
            ((u/gba/assemble-reg x)
             x)
            ((integerp x)
             (let ((r (u/gba/fresh!)))
-              (u/gba/emit! `(mov ,r ,(logand #x000000ff x)))
+              (u/gba/emit! (u/gba/constant r (logand #xffff x)))
               r))
            (t (error "Don't know how to write value: %s" x)))))
-     (u/gba/emit! `(str byte ,reg ,(u/gba/loc symtab loc))))))
-
-(defun u/gba/set16 (symtab loc x)
-  "Generate code setting the memory at LOC in SYMTAB to X.
-X is either a register name or a constant."
-  (u/gba/scope
-   (let
-       ((reg
-         (cond
-          ((u/gba/assemble-reg x)
-           x)
-          ((integerp x)
-           (let ((r (u/gba/fresh!)))
-             (u/gba/emit! (u/gba/constant r (logand #xffff x)))
-             r))
-          (t (error "Don't know how to write value: %s" x)))))
-     (u/gba/emit!
-      `(strh ,reg ,(u/gba/loc symtab loc))))))
+      (u/gba/emit!
+       `(strh ,reg ,(u/gba/loc symtab loc)))))))
 
 (defun u/gba/set32 (symtab loc x)
   "Generate code setting the memory at LOC in SYMTAB to X.
 X is either a register name or a constant."
-  (u/gba/scope
-   (let
-       ((reg
-         (cond
-          ((u/gba/assemble-reg x)
-           x)
-          ((integerp x)
-           (let ((r (u/gba/fresh!)))
-             (u/gba/emit! (u/gba/constant r x))
-             r))
-          (t (error "Don't know how to write value: %s" x)))))
-     (u/gba/emit! `(str ,reg ,(u/gba/loc symtab loc))))))
+  (u/gba/emit!
+   (u/gba/scope
+    (let
+        ((reg
+          (cond
+           ((u/gba/assemble-reg x)
+            x)
+           ((integerp x)
+            (let ((r (u/gba/fresh!)))
+              (u/gba/emit! (u/gba/constant r x))
+              r))
+           (t (error "Don't know how to write value: %s" x)))))
+      (u/gba/emit! `(str ,reg ,(u/gba/loc symtab loc)))))))
+
+(defun u/gba/call (_symtab sym &rest args)
+  "Generate code calling the function at SYM in SYMTAB.
+The locations in ARGS are copied to the argument registers."
+  (when (> (length args) (length u/gba/regs-arg))
+    (error "Attempted to call function %s with too many (%s) arguments: %s" sym (length args) args))
+  (u/gba/emit!
+   (u/gba/scope
+    (apply #'u/gba/burn! (-take (length args) u/gba/regs-arg))
+    (--each (-zip-pair args u/gba/regs-arg)
+      (let ((x (car it)))
+        (cond
+         ((u/gba/assemble-reg it)
+          (u/gba/emit! `(mov ,(cdr it) ,it)))
+         ((integerp x)
+          (u/gba/emit! (u/gba/constant ,(cdr it) x)))
+         (t (error "Don't know how to pass argument: %s" x)))))
+    (u/gba/emit!
+     `(bl ,sym)))))
 
 (defun u/gba/write-struct (r st &rest fields)
   "Given a `u/structdef' ST, write FIELDS to the address in R."
   (let ((field-offsets (-sort (-on #'< #'cdr) (ht->alist (u/structdef-fields st))))
         (prev 0))
-    (u/gba/scope
-     (--each field-offsets
-       (when-let ((v (plist-get fields (car it))))
-         (cond
-          ((integerp v) ;; integer constant
-           (u/gba/emit!
-            (let ((fr (u/gba/fresh!)))
-              (u/gba/constant fr v)
-              `(str wb ,fr ,r ,(- (cdr it) prev)))))
-          ((symbolp v) ;; another register
-           (u/gba/emit!
-            `(str wb ,v ,r ,(- (cdr it) prev))))
-          ((listp v) ;; a list of bytes
-           (error "TODO: pack lists of bytes into words and write them"))
-          (t
-           (error "Unsupported structure field value: %s" v)))
-         (setf prev (cdr it)))))))
+    (u/gba/emit!
+     (u/gba/scope
+      (--each field-offsets
+        (when-let ((v (plist-get fields (car it))))
+          (cond
+           ((integerp v) ;; integer constant
+            (u/gba/emit!
+             (let ((fr (u/gba/fresh!)))
+               (u/gba/constant fr v)
+               `(str wb ,fr ,r ,(- (cdr it) prev)))))
+           ((symbolp v) ;; another register
+            (u/gba/emit!
+             `(str wb ,v ,r ,(- (cdr it) prev))))
+           ((listp v) ;; a list of bytes
+            (error "TODO: pack lists of bytes into words and write them"))
+           (t
+            (error "Unsupported structure field value: %s" v)))
+          (setf prev (cdr it))))))))
 
 (defun u/gba/write-pixel (x y r g b)
   "Write R G B pixel to X,Y."
-  `(,@(u/gba/constant 'r0 (+ #x06000000 (* 2 (+ x (* y 240)))))
-    ,@(u/gba/constant
-       'r1
-       (logior
-        (lsh (logand #b11111 r) 10)
-        (lsh (logand #b11111 g) 5)
-        (logand #b11111 b)))
-    (str byte r1 r0)
-    (mov r1 r1 (lsr 8))
-    (str byte r1 r0 1)))
+  (u/gba/emit!
+   `(,@(u/gba/constant 'r0 (+ #x06000000 (* 2 (+ x (* y 240)))))
+     ,@(u/gba/constant
+        'r1
+        (logior
+         (lsh (logand #b11111 r) 10)
+         (lsh (logand #b11111 g) 5)
+         (logand #b11111 b)))
+     (str byte r1 r0)
+     (mov r1 r1 (lsr 8))
+     (str byte r1 r0 1))))
 
 (defun u/gba/when-cond? (cond body)
   "Run BODY if COND is set."
-  (u/gba/scope
-   (u/gba/emit!
-    `(b ,cond :end)
-    body
-    :end)))
+  (u/gba/emit!
+   (u/gba/scope
+    (u/gba/emit!
+     `(b ,cond :end)
+     body
+     :end))))
 
 (defconst u/gba/button-masks
   '((a . #b1)
@@ -899,14 +1007,15 @@ X is either a register name or a constant."
 (defun u/gba/button-pressed? (st button body)
   "Run BODY if BUTTON is pressed in symbol table ST."
   (let ((mask (alist-get button u/gba/button-masks)))
-    (u/gba/scope
-     (let ((inpr (u/gba/fresh!))
-           (maskr (u/gba/fresh!)))
-       (u/gba/emit!
-        (u/gba/get16 st inpr :reg-keyinput)
-        (u/gba/constant maskr mask)
-        `(bic s ,inpr ,maskr ,inpr)
-        (u/gba/when-cond? 'eq body))))))
+    (u/gba/emit!
+     (u/gba/scope
+      (let ((inpr (u/gba/fresh!))
+            (maskr (u/gba/fresh!)))
+        (u/gba/emit!
+         (u/gba/get16 st inpr :reg-keyinput)
+         (u/gba/constant maskr mask)
+         `(bic s ,inpr ,maskr ,inpr)
+         (u/gba/when-cond? 'eq body)))))))
 
 (defun u/gba/test ()
   "Test function."
