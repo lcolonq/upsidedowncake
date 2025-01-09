@@ -34,7 +34,7 @@ BODY is passed directly to `cl-defstruct'."
  u/symtab-entry
  addr ;; location of this symbol (in machine address space)
  (type 'code) ;; code or bytes or var or const
- data ;; list of instructions if code, or a list of bytes if data, or a size if var, or a function from symbol table and address to list of bytes if const
+ data ;; list of instructions if code, or a list of bytes if bytes, or a size if var, or a function from symbol table and address to list of bytes if const
  )
 
 (defun u/symtab-entry-length (symtab addr entry)
@@ -137,6 +137,18 @@ Or other things, we'll play it by ear."
    (logand #xff (lsh w32 -8))
    (logand #xff (lsh w32 -16))
    (logand #xff (lsh w32 -24))))
+
+(defun u/split64le (w64)
+  "Split the 64-bit W64 into a little-endian list of 8-bit integers."
+  (list
+   (logand #xff w64)
+   (logand #xff (lsh w64 -8))
+   (logand #xff (lsh w64 -16))
+   (logand #xff (lsh w64 -24))
+   (logand #xff (lsh w64 -32))
+   (logand #xff (lsh w64 -40))
+   (logand #xff (lsh w64 -48))
+   (logand #xff (lsh w64 -56))))
 
 (defun u/pad-to (len bytes)
   "Pad BYTES to LEN with 0xde.

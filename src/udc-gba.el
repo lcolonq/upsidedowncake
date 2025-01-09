@@ -989,9 +989,28 @@ The locations in ARGS are copied to the argument registers."
   (u/gba/emit!
    (u/gba/scope
     (u/gba/emit!
-     `(b ,cond :end)
-     body
-     :end))))
+     `(b ,cond :end))
+    (funcall body)
+    (u/gba/emit! :end))))
+
+(defun u/gba/do-times (end k)
+  "Generate a loop incrementing a counter from 0 to END - 1.
+K represents the body of the loop, and is passed the counter register."
+  (u/gba/emit!
+   (u/gba/scope
+    (let ((counter (u/gba/fresh!))
+          (max (u/gba/fresh!)))
+      (u/gba/emit!
+       `(mov ,counter 0)
+       (u/gba/constant max end)
+       :start
+       `(cmp s ,counter ,counter ,max)
+       `(b eq :end))
+      (funcall k counter)
+      (u/gba/emit!
+       `(add ,counter ,counter 1)
+       '(b :start)
+       :end)))))
 
 (defconst u/gba/button-masks
   '((a . #b1)
@@ -1050,7 +1069,19 @@ The locations in ARGS are copied to the argument registers."
     (=
      . (lambda (ret o0 o1)
          (unless (and o0 o1) (error "Operator = takes two arguments, was given: %s %s" o0 o1))
-         `((sub ,ret ,o0 ,o1) (mvn ,ret ,ret))))
+         `((sub ,ret ,o0 ,o1) (rsb s ,o0 ,ret ,ret) (adc ,ret ,o0 ,ret))))
+    (&
+     . (lambda (ret o0 o1)
+         (unless (and o0 o1) (error "Operator & takes two arguments, was given: %s %s" o0 o1))
+         `((and ,ret ,o0 ,o1))))
+    (|
+     . (lambda (ret o0 o1)
+         (unless (and o0 o1) (error "Operator | takes two arguments, was given: %s %s" o0 o1))
+         `((orr ,ret ,o0 ,o1))))
+    (^
+     . (lambda (ret o0 o1)
+         (unless (and o0 o1) (error "Operator ^ takes two arguments, was given: %s %s" o0 o1))
+         `((eor ,ret ,o0 ,o1))))
     (@8
      . (lambda (ret o0 _)
          `((ldr byte ,ret ,o0))))
@@ -1117,16 +1148,23 @@ The locations in ARGS are copied to the argument registers."
    (u/gba/compile-expression-labeled-helper regs lexp)))
 (defun u/gba/compile-expression (symtab regs exp)
   "Compile EXP into assembly code using REGS and SYMTAB."
-  (u/gba/scope
-   (let ((labeled (u/gba/compile-expression-label-sethi-ullman exp)))
-     (when (> (car labeled) (length regs))
-       (error "Expression needs %s registers to compile, but only %s are available" (car labeled) regs))
-     (--each (u/gba/compile-expression-labeled regs labeled)
-       (u/gba/emit!
-        (cl-case (car it)
-          (symbol (u/gba/addr (cadr it) symtab (caddr it)))
-          (const (u/gba/constant (cadr it) (caddr it)))
-          (t it)))))))
+  (u/gba/emit!
+   (u/gba/scope
+    (let ((labeled (u/gba/compile-expression-label-sethi-ullman exp)))
+      (when (> (car labeled) (length regs))
+        (error "Expression needs %s registers to compile, but only %s are available" (car labeled) regs))
+      (--each (u/gba/compile-expression-labeled regs labeled)
+        (u/gba/emit!
+         (cl-case (car it)
+           (symbol (u/gba/addr (cadr it) symtab (caddr it)))
+           (const (u/gba/constant (cadr it) (caddr it)))
+           (t it))))))))
+(defun u/gba/expr (symtab res exp)
+  "Compile EXP into assembly code using SYMTAB.
+Place the result in RES."
+  (let ((regs (u/gba/codegen-regs-available (u/gba/codegen))))
+    (when (-contains? regs res) (error "Result register %s is available" res))
+    (u/gba/compile-expression symtab (cons res regs) exp)))
 
 (provide 'udc-gba)
 ;;; udc-gba.el ends here
