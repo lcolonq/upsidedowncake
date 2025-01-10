@@ -70,7 +70,8 @@ BODY is passed directly to `cl-defstruct'."
 
 (defun u/symtab-lookup (symtab name)
   "Return the address of NAME in SYMTAB."
-  (ht-get (u/symtab-symbols symtab) name))
+  (let ((res (ht-get (u/symtab-symbols symtab) name)))
+    (or res (error "Could not find symbol: %s" name))))
 
 (defun u/symtab-lookup-relative (symtab base name)
   "Return the word offset of NAME in SYMTAB given the word offset BASE."
@@ -192,6 +193,12 @@ Return a list of the width, height, and pixels of the image."
             (lsh (u/aref-u16-be data (+ a 4)) -8)))
          (-iota (* width height)))))
     (list width height (seq-into pixels 'vector))))
+
+(defun u/load-image-png (path)
+  "Load the PNG image at PATH (by converting to Farbfeld first)."
+  (let ((tmp "/tmp/udcff.ff"))
+    (when (= 0 (call-process-shell-command (format "png2ff <'%s' >'%s'" path tmp) nil "*udc-png-error*"))
+      (u/load-image-ff tmp))))
 
 (defun u/pixel-grayscale (p)
   "Given a list of red, green, and blue bytes P, convert it to one grayscale byte."

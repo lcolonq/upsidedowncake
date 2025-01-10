@@ -448,6 +448,7 @@ INS is either:
 
 ;;;; Known addresses in most symbol tables
 (defun u/gba/make-symtab ()
+  "Create and populate a new symbol table."
   (let ((symtab (u/make-symtab :alignment 4)))
     (u/symtab-add-entry! symtab :reg-ifbios (u/make-symtab-entry :addr #x03007ff8 :type 'var :data 2))
     (u/symtab-add-entry! symtab :reg-intaddr (u/make-symtab-entry :addr #x03007ffc :type 'var :data 4))
@@ -620,14 +621,14 @@ No registers will be available."
 Registers from the enclosing scope will be available."
   `(let* ((u/gba/codegen
            (u/gba/make-codegen
-            :regs-available (u/gba/codegen-regs-available (u/gba/codegen)))))
+            :regs-available (copy-sequence (u/gba/codegen-regs-available (u/gba/codegen))))))
      ,@body
      (u/gba/codegen-extract)))
 (defmacro u/gba/function (&rest body)
   "Run BODY in a new code generation context and return the generated instructions.
 The code will be wrapped in the function header and footer.
 Callee-saved registers will be available."
-  `(let* ((u/gba/codegen (u/gba/make-codegen :regs-available u/gba/regs-callee-saved)))
+  `(let* ((u/gba/codegen (u/gba/make-codegen :regs-available (copy-sequence u/gba/regs-callee-saved))))
      (u/gba/function-header)
      (apply #'u/gba/push u/gba/regs-callee-saved)
      ,@body
@@ -928,24 +929,27 @@ X is either a register name or a constant."
            (t (error "Don't know how to write value: %s" x)))))
       (u/gba/emit! `(str ,reg ,(u/gba/loc symtab loc)))))))
 
-(defun u/gba/call (_symtab sym &rest args)
+(defun u/gba/call (symtab sym &rest args)
   "Generate code calling the function at SYM in SYMTAB.
 The locations in ARGS are copied to the argument registers."
   (when (> (length args) (length u/gba/regs-arg))
     (error "Attempted to call function %s with too many (%s) arguments: %s" sym (length args) args))
   (u/gba/emit!
-   (u/gba/scope
-    (apply #'u/gba/burn! (-take (length args) u/gba/regs-arg))
-    (--each (-zip-pair args u/gba/regs-arg)
-      (let ((x (car it)))
-        (cond
-         ((u/gba/assemble-reg it)
-          (u/gba/emit! `(mov ,(cdr it) ,it)))
-         ((integerp x)
-          (u/gba/emit! (u/gba/constant ,(cdr it) x)))
-         (t (error "Don't know how to pass argument: %s" x)))))
-    (u/gba/emit!
-     `(bl ,sym)))))
+    (u/gba/scope
+      (apply #'u/gba/burn! (-take (length args) u/gba/regs-arg))
+      (--each (-zip-pair args u/gba/regs-arg)
+        (let ((x (car it)))
+          (cond
+            ((u/gba/assemble-reg it)
+              (u/gba/emit! `(mov ,(cdr it) ,it)))
+            ((integerp x)
+              (u/gba/emit! (u/gba/constant (cdr it) x)))
+            ((keywordp x)
+              (u/gba/emit! (u/gba/addr (cdr it) symtab x))
+              )
+            (t (error "Don't know how to pass argument: %s" x)))))
+      (u/gba/emit!
+        `(bl ,sym)))))
 
 (defun u/gba/write-struct (r st &rest fields)
   "Given a `u/structdef' ST, write FIELDS to the address in R."
@@ -1002,7 +1006,9 @@ K represents the body of the loop, and is passed the counter register."
           (max (u/gba/fresh!)))
       (u/gba/emit!
        `(mov ,counter 0)
-       (u/gba/constant max end)
+       (cond
+        ((symbolp end) `(mov ,max ,end))
+        ((integerp end) (u/gba/constant max end)))
        :start
        `(cmp s ,counter ,counter ,max)
        `(b eq :end))
