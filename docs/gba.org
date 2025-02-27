@@ -112,7 +112,7 @@ the first attribute field:
   |   10 | Sprite part of object window? idk |
   |   11 | Forbidden                         |
 - bit 12 enables mosaic effect
-- bit 13 sets the color mode: 4bpp if 0; 8pp if 1
+- bit 13 sets the palette index size: 4bpp if 0; 8pp if 1
 - bits 14-15 determine the sprite shape alongside the sprite size in the next attribute field
 
 the second attribute field:

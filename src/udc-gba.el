@@ -707,6 +707,15 @@ If the colors do not occur exactly in PAL, throw an error."
     (let ((res (--find-index (equal it rgb) (u/gba/palette-colors pal))))
       (or res (error "Could not find color in palette: %s" rgb)))))
 
+(defun u/gba/image-load-png-palette (path)
+  "Load an image and derive a palette automatically from PATH."
+  (let* ( (img (u/load-image-png path))
+          (colors (cons '(0 0 0) (-uniq (seq-into (caddr img) 'list))))
+          (pal (u/gba/make-palette :colors colors)))
+    (cons
+      (u/gba/image-tiles (u/gba/image-quantize-palette-exact pal) img)
+      pal)))
+
 (cl-defstruct (u/gba/image (:constructor u/gba/make-image))
   width
   height
@@ -756,20 +765,18 @@ QUANTIZE should be a function that converts an RBG pixel to a 4-bit color index.
                     (cons (cons x y) (alist-get (cons x y) cell-indices 0 nil #'equal)))
                   (-iota 32)))
                (-iota 32))))
-        (print cell-indices)
-        (print cell-indices-populated)
         (u/gba/make-image
          :width width
          :height height
          :tiledata unique-tiles
          :cell-indices cell-indices-populated)))))
 
-(defun u/gba/tile-s-bytes (stile)
+(defun u/gba/tile-4bit-bytes (stile)
   "Convert the list of nibbles STILE into bytes."
   (if (and stile (car stile) (cadr stile))
       (cons
        (logior (car stile) (lsh (cadr stile) 4))
-       (u/gba/tile-s-bytes (cddr stile)))
+       (u/gba/tile-4bit-bytes (cddr stile)))
     nil))
 
 ;;;; Helpful "macros" / codegen snippets
@@ -1171,6 +1178,31 @@ Place the result in RES."
   (let ((regs (u/gba/codegen-regs-available (u/gba/codegen))))
     (when (-contains? regs res) (error "Result register %s is available" res))
     (u/gba/compile-expression symtab (cons res regs) exp)))
+
+(defun u/gba/sprite-attr1 (sp) 
+  "The location of the first attributes for sprite SP."
+  `(:oam . ,(* sp 8)))
+(defun u/gba/sprite-attr2 (sp)
+  "The location of the second attributes for sprite SP."
+  `(:oam . ,(+ 2 (* sp 8))))
+(defun u/gba/sprite-attr3 (sp)
+  "The location of the third attributes for sprite SP."
+  `(:oam . ,(+ 4 (* sp 8))))
+(defun u/gba/set-sprite-coords (syms sp x y)
+  "Set the coordinates for sprite SP to (X, Y) in the context of SYMS."
+  (u/gba/emit!
+    (u/gba/scope
+      (let ( (loc (u/gba/loc syms (u/gba/sprite-attr1 sp)))
+             (r (u/gba/fresh!)))
+        (u/gba/get16 syms r loc)
+        (u/gba/emit! `(orr ,r ,r ,y))
+        (u/gba/set16 syms loc r)))
+    (u/gba/scope
+      (let ( (loc (u/gba/loc syms (u/gba/sprite-attr2 sp)))
+             (r (u/gba/fresh!)))
+        (u/gba/get16 syms r loc)
+        (u/gba/emit! `(orr ,r ,r ,x))
+        (u/gba/set16 syms loc r)))))
 
 (provide 'udc-gba)
 ;;; udc-gba.el ends here
