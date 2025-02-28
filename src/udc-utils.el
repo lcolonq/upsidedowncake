@@ -22,64 +22,6 @@ BODY is passed directly to `cl-defstruct'."
   "Lookup SLOT in the struct S."
   `(eieio-oref ,s (quote ,slot)))
 
-;;;; Symbol tables
-(u/defstruct
- u/symtab
- (alignment 1) ;; symbol addresses must be a multiple of this
- (symbols (ht-create)) ;; hash table mapping symbols to entries
- (sections (ht-create)) ;; hash table mapping section name symbols to the current start address
- )
-
-(u/defstruct
- u/symtab-entry
- addr ;; location of this symbol (in machine address space)
- (type 'code) ;; code or bytes or var or const
- data ;; list of instructions if code, or a list of bytes if bytes, or a size if var, or a function from symbol table and address to list of bytes if const
- )
-
-(defun u/symtab-entry-length (symtab addr entry)
-  "Return the length in bytes of ENTRY at ADDR in SYMTAB."
-  (let ((data (u/symtab-entry-data entry)))
-    (cl-case (u/symtab-entry-type entry)
-      (code (* 4 (length data)))
-      (bytes (length data))
-      (var data)
-      (const (length (funcall data symtab addr)))
-      (t (error "Unknown symbol table entry type: %s" (u/symtab-entry-type entry))))))
-
-(defun u/symtab-add-section! (symtab name addr)
-  "Add a section NAME starting at ADDR in SYMTAB."
-  (ht-set! (u/symtab-sections symtab) name addr))
-
-(defun u/symtab-add-entry! (symtab name entry)
-  "Add a mapping from NAME to ENTRY in SYMTAB."
-  (ht-set! (u/symtab-symbols symtab) name entry))
-
-(defun u/symtab-add! (symtab section name type data)
-  "Add a mapping from NAME to DATA of TYPE in SECTION of SYMTAB."
-  (let* ((section-offset (ht-get (u/symtab-sections symtab) section))
-         (align (u/symtab-alignment symtab))
-         (aligned (* (/ (+ section-offset (- align 1)) align) align))
-         (entry (u/make-symtab-entry :addr aligned :type type :data data)))
-    (unless section-offset
-      (error "Could not find section %s when adding symbol %s" section name))
-    (u/symtab-add-entry! symtab name entry)
-    (ht-set!
-     (u/symtab-sections symtab) section
-     (+ aligned (u/symtab-entry-length symtab aligned entry)))))
-
-(defun u/symtab-lookup (symtab name)
-  "Return the address of NAME in SYMTAB."
-  (let ((res (ht-get (u/symtab-symbols symtab) name)))
-    (or res (error "Could not find symbol: %s" name))))
-
-(defun u/symtab-lookup-relative (symtab base name)
-  "Return the word offset of NAME in SYMTAB given the word offset BASE."
-  (when-let*
-      ((ent (u/symtab-lookup symtab name))
-       (addrword (/ (u/symtab-entry-addr ent) 4)))
-    (- addrword base 2)))
-
 ;;;; Structs
 (u/defstruct
  u/structdef
