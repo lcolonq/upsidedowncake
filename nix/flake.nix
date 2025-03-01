@@ -12,6 +12,9 @@
       pkgs = import nixpkgs {system = "x86_64-linux";};
       devkitARM = devkitnix.packages.x86_64-linux.devkitARM;
     in {
+      packages.x86_64-linux = {
+        inherit devkitARM;
+      };
       devShells.x86_64-linux = {
         default = pkgs.mkShell {
           buildInputs = [
