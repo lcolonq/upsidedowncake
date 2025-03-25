@@ -8,26 +8,33 @@
 (require 'dash)
 (require 'ht)
 (require 'udc-utils)
-(require 'udc-gba-assembler)
+(require 'udc-gba-constants)
+(require 'udc-gba-arm-assembler)
+(require 'udc-gba-thumb-assembler)
 
 ;;;; Symbol tables
 (cl-defstruct (u/gba/symtab (:constructor u/gba/make-symtab))
- (alignment 1) ;; symbol addresses must be a multiple of this
- (symbols (ht-create)) ;; hash table mapping symbols to entries
- (sections (ht-create)) ;; hash table mapping section name symbols to the current start address
- )
+  (alignment 4) ;; symbol addresses must be a multiple of this
+  (symbols (ht-create)) ;; hash table mapping symbols to entries
+  (sections (ht-create)) ;; hash table mapping section name symbols to the current start address
+  )
 
 (cl-defstruct (u/gba/symtab-entry (:constructor u/gba/make-symtab-entry))
- addr ;; location of this symbol (in machine address space)
- (type 'code) ;; code or bytes or var or const
- data ;; list of instructions if code, or a list of bytes if bytes, or a size if var, or a function from symbol table and address to list of bytes if const
- )
+  addr ;; location of this symbol (in machine address space)
+  (type 'arm) ;; arm or thumb or bytes or var or const
+  data
+  ;; list of instructions if arm or thumb,
+  ;; or a list of bytes if bytes,
+  ;; or a size if var,
+  ;; or a function from symbol table and address to list of bytes if const
+  )
 
 (defun u/gba/symtab-entry-length (symtab addr entry)
   "Return the length in bytes of ENTRY at ADDR in SYMTAB."
   (let ((data (u/gba/symtab-entry-data entry)))
     (cl-case (u/gba/symtab-entry-type entry)
-      (code (* 4 (length data)))
+      (arm (* 4 (length data)))
+      (thumb (* 2 (length data)))
       (bytes (length data))
       (var data)
       (const (length (funcall data symtab addr)))
@@ -44,15 +51,15 @@
 (defun u/gba/symtab-add! (symtab section name type data)
   "Add a mapping from NAME to DATA of TYPE in SECTION of SYMTAB."
   (let* ((section-offset (ht-get (u/gba/symtab-sections symtab) section))
-         (align (u/gba/symtab-alignment symtab))
-         (aligned (* (/ (+ section-offset (- align 1)) align) align))
-         (entry (u/gba/make-symtab-entry :addr aligned :type type :data data)))
+          (align (u/gba/symtab-alignment symtab))
+          (aligned (* (/ (+ section-offset (- align 1)) align) align))
+          (entry (u/gba/make-symtab-entry :addr aligned :type type :data data)))
     (unless section-offset
       (error "Could not find section %s when adding symbol %s" section name))
     (u/gba/symtab-add-entry! symtab name entry)
     (ht-set!
-     (u/gba/symtab-sections symtab) section
-     (+ aligned (u/gba/symtab-entry-length symtab aligned entry)))))
+      (u/gba/symtab-sections symtab) section
+      (+ aligned (u/gba/symtab-entry-length symtab aligned entry)))))
 
 (defun u/gba/symtab-lookup (symtab name)
   "Return the address of NAME in SYMTAB."
@@ -62,14 +69,19 @@
 (defun u/gba/symtab-lookup-relative (symtab base name)
   "Return the word offset of NAME in SYMTAB given the word offset BASE."
   (when-let*
-      ((ent (u/gba/symtab-lookup symtab name))
-       (addrword (/ (u/gba/symtab-entry-addr ent) 4)))
+    ((ent (u/gba/symtab-lookup symtab name))
+      (addrword (/ (u/gba/symtab-entry-addr ent) 4)))
     (- addrword base 2)))
 
 ;;;; Known addresses in most symbol tables
 (defun u/gba/initial-symtab ()
   "Create and populate a new symbol table."
   (let ((symtab (u/gba/make-symtab :alignment 4)))
+    (u/gba/symtab-add-section! symtab :header u/gba/rom-start)
+    (u/gba/symtab-add-section! symtab :code (+ u/gba/rom-start #x1000))
+    (u/gba/symtab-add-section! symtab :data (+ u/gba/rom-start #x20000))
+    (u/gba/symtab-add-section! symtab :vars #x02000000)
+
     (u/gba/symtab-add-entry! symtab :reg-ifbios (u/gba/make-symtab-entry :addr #x03007ff8 :type 'var :data 2))
     (u/gba/symtab-add-entry! symtab :reg-intaddr (u/gba/make-symtab-entry :addr #x03007ffc :type 'var :data 4))
 
@@ -135,12 +147,12 @@
   "Replace all keywords in INS by looking up relative addresses in SYMTAB.
 We assume that this instruction is at word IDX in memory."
   (--map
-   (if (keywordp it)
-       (if-let* ((ent (u/gba/symtab-lookup-relative symtab idx it)))
-           ent
-         (error "Unknown symbol: %s" it))
-     it)
-   ins))
+    (if (keywordp it)
+      (if-let* ((ent (u/gba/symtab-lookup-relative symtab idx it)))
+        ent
+        (error "Unknown symbol: %s" it))
+      it)
+    ins))
 
 (defun u/gba/relocate (symtab base prog)
   "Replace all keywords in PROG by looking up relative addresses in SYMTAB.
@@ -151,29 +163,33 @@ We assume that PROG starts in memory at word BASE."
   "Convert SYMTAB to a vector of bytes to be placed at address BASE.
 SIZE is the length of the resulting vector."
   (let* ((mem (make-vector size 0))
-         (memwrite
-          (lambda (name addr idx bytes)
-            (if (and (>= idx 0) (< (+ idx (length bytes)) size))
+          (memwrite
+            (lambda (name addr idx bytes)
+              (if (and (>= idx 0) (< (+ idx (length bytes)) size))
                 (u/write! mem idx bytes)
-              (warn "Symbol table entry %s at %s is out of bounds" name addr)))))
+                (warn "Symbol table entry %s at %s is out of bounds" name addr)))))
     (--each (ht->alist (u/gba/symtab-symbols symtab))
       (let* ((name (car it))
-             (entry (cdr it))
-             (type (u/gba/symtab-entry-type entry))
-             (addr (u/gba/symtab-entry-addr entry))
-             (idx (- addr base)))
+              (entry (cdr it))
+              (type (u/gba/symtab-entry-type entry))
+              (addr (u/gba/symtab-entry-addr entry))
+              (idx (- addr base)))
         (cl-case type
-          (code
-           (let* ((relocated (u/gba/relocate symtab (/ addr 4) (u/gba/symtab-entry-data entry)))
-                  (bytes (u/gba/assemble relocated)))
-             (funcall memwrite name addr idx bytes)))
+          (arm
+            (let* ((relocated (u/gba/relocate symtab (/ addr 4) (u/gba/symtab-entry-data entry)))
+                    (bytes (u/gba/arm-assemble relocated)))
+              (funcall memwrite name addr idx bytes)))
+          (thumb
+            (let* ((relocated (u/gba/relocate symtab (/ addr 4) (u/gba/symtab-entry-data entry)))
+                    (bytes (u/gba/thumb-assemble relocated)))
+              (funcall memwrite name addr idx bytes)))
           (bytes
-           (funcall memwrite name addr idx (u/gba/symtab-entry-data entry)))
+            (funcall memwrite name addr idx (u/gba/symtab-entry-data entry)))
           (var nil)
           (const
-           (funcall
-            memwrite name addr idx
-            (funcall (u/gba/symtab-entry-data entry) symtab addr)))
+            (funcall
+              memwrite name addr idx
+              (funcall (u/gba/symtab-entry-data entry) symtab addr)))
           (t (error "Unknown symbol table entry type: %s" (u/gba/symtab-entry-type it))))))
     mem))
 
@@ -188,20 +204,20 @@ SIZE is the length of the resulting vector."
   "Return a function from a symbol table to a HEADER."
   (lambda (symtab addr)
     (-concat
-     (u/gba/assemble-ins
-      `(b ,(or (u/gba/symtab-lookup-relative symtab (/ addr 4) (u/gba/header-entry header)) -2)))
-     (u/pad-to 156 '()) ;; nintendo logo
-     (u/pad-to 12 (seq-into (s-upcase (u/gba/header-title header)) 'list)) ;; game title
-     (u/pad-to 4 (seq-into (s-upcase (u/gba/header-code header)) 'list)) ;; game code
-     (u/pad-to 2 (seq-into (s-upcase (u/gba/header-maker header)) 'list)) ;; maker code
-     '(#x96) ;; fixed value
-     '(#x00) ;; main unit code
-     '(#x00) ;; device type
-     (u/pad-to 7 '()) ;; reserved area
-     '(#x00) ;; software version
-     '(#x00) ;; header checksum
-     (u/pad-to 2 '()) ;; reserved area
-     )))
+      (u/gba/arm-assemble-ins ;; place an ARM jump to entrypoint at the start
+        `(b ,(or (u/gba/symtab-lookup-relative symtab (/ addr 4) (u/gba/header-entry header)) -2)))
+      (u/pad-to 156 '()) ;; nintendo logo
+      (u/pad-to 12 (seq-into (s-upcase (u/gba/header-title header)) 'list) #x00) ;; game title
+      (u/pad-to 4 (seq-into (s-upcase (u/gba/header-code header)) 'list) #x00) ;; game code
+      (u/pad-to 2 (seq-into (s-upcase (u/gba/header-maker header)) 'list) #x00) ;; maker code
+      '(#x96) ;; fixed value
+      '(#x00) ;; main unit code
+      '(#x00) ;; device type
+      (u/pad-to 7 '() #x00) ;; reserved area
+      '(#x00) ;; software version
+      '(#x00) ;; header checksum
+      (u/pad-to 2 '() #x00) ;; reserved area
+      )))
 
 (provide 'udc-gba-linker)
 ;;; udc-gba-linker.el ends here

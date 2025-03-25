@@ -93,11 +93,11 @@ Or other things, we'll play it by ear."
    (logand #xff (lsh w64 -48))
    (logand #xff (lsh w64 -56))))
 
-(defun u/pad-to (len bytes)
-  "Pad BYTES to LEN with 0xde.
+(defun u/pad-to (len bytes &optional byte)
+  "Pad BYTES to LEN with 0xde (or BYTE).
 Truncate BYTES if it is longer than LEN."
   (let* ((taken (-take len bytes)))
-    (append taken (-repeat (- len (length taken)) #xde))))
+    (append taken (-repeat (- len (length taken)) (or byte #xde)))))
 
 (defun u/write! (mem addr bytes)
   "Given a vector MEM and a base ADDR, write BYTES."
