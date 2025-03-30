@@ -411,8 +411,10 @@ It is assumed that we are within a code generation context."
 It is assumed that we are within a code generation context."
   (setf (u/gba/ir-gen-next-use-bb-out g)
     (car (u/gba/ir-cfg-nextuse cfg)))
-  (let ((blocks (ht-copy (u/gba/ir-cfg-blocks cfg))))
-    ))
+  (--each (ht-values (u/gba/ir-cfg-blocks cfg))
+    (u/gba/ir-gen-bb g it)))
+  ;; (let ((blocks (ht-copy (u/gba/ir-cfg-blocks cfg))))
+  ;;   ))
   
 
 ;; Test code
@@ -434,10 +436,9 @@ It is assumed that we are within a code generation context."
 (defun c/test-gen ()
   (let ((u/gba/codegen (u/gba/make-codegen :type 'thumb))
          (gen (u/gba/make-ir-gen)))
-    (u/gba/claim! 'r4 'r5)
-    (u/gba/ir-gen-bb gen test-bb)
+    (u/gba/claim! 'r3 'r4 'r5)
+    (u/gba/ir-gen-cfg gen test-bb-cfg)
     (reverse (u/gba/codegen-instructions (u/gba/codegen)))))
-(c/test-gen)
 
 (progn
   (setf test-cfg (u/gba/make-ir-cfg))
