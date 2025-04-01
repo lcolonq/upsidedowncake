@@ -1,4 +1,4 @@
-;;; udc-gba-arm-helpers --- GBA assembler (ARM) -*- lexical-binding: t; byte-compile-warnings: (not suspicious); -*-
+;;; udc-gba-arm-helpers --- ARM helpers -*- lexical-binding: t; byte-compile-warnings: (not suspicious); -*-
 ;;; Commentary:
 ;;; Code:
 ;;;; Library imports
@@ -21,20 +21,20 @@ No registers will be available."
 (defun u/gba/arm-push (&rest regs)
   "Generate a push of REGS to the stack."
   (u/gba/emit!
-   `(stm down wb ,u/gba/sp ,regs)))
+   `(stm down wb ,u/gba/arm-sp ,regs)))
 (defun u/gba/arm-pop (&rest regs)
   "Generate a pop of REGS to the stack."
   (u/gba/emit!
-   `(ldm wb post ,u/gba/sp ,regs)))
+   `(ldm wb post ,u/gba/arm-sp ,regs)))
 (defun u/gba/arm-function-header ()
   "Generate the function header."
-  (u/gba/arm-push u/gba/lr u/gba/fp)
-  (u/gba/emit! `(mov ,u/gba/fp ,u/gba/sp)))
+  (u/gba/arm-push u/gba/arm-lr u/gba/arm-fp)
+  (u/gba/emit! `(mov ,u/gba/arm-fp ,u/gba/arm-sp)))
 (defun u/gba/arm-function-footer ()
   "Generate the function footer."
-  (u/gba/emit! `(mov ,u/gba/sp ,u/gba/fp))
-  (u/gba/arm-pop u/gba/lr u/gba/fp)
-  (u/gba/emit! `(bx ,u/gba/lr)))
+  (u/gba/emit! `(mov ,u/gba/arm-sp ,u/gba/arm-fp))
+  (u/gba/arm-pop u/gba/arm-lr u/gba/arm-fp)
+  (u/gba/emit! `(bx ,u/gba/arm-lr)))
 (defmacro u/gba/arm-function (symtab sym &rest body)
   "Run BODY in a new code generation context.
 Place the generated code in SYMTAB at SYM.
@@ -44,11 +44,11 @@ Callee-saved registers will be available."
   `(let* ((u/gba/codegen
             (u/gba/make-codegen
               :type 'arm
-              :regs-available (copy-sequence u/gba/regs-callee-saved))))
+              :regs-available (copy-sequence u/gba/arm-regs-callee-saved))))
      (u/gba/arm-function-header)
-     (apply #'u/gba/arm-push u/gba/regs-callee-saved)
+     (apply #'u/gba/arm-push u/gba/arm-regs-callee-saved)
      (u/gba/emit! ,@body)
-     (apply #'u/gba/arm-pop u/gba/regs-callee-saved)
+     (apply #'u/gba/arm-pop u/gba/arm-regs-callee-saved)
      (u/gba/arm-function-footer)
      (u/gba/codegen-extract-with-literals ,symtab :code ,sym)))
 

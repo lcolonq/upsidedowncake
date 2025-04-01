@@ -7,6 +7,7 @@
 (require 'f)
 (require 'dash)
 (require 'ht)
+(require 'queue)
 (require 'udc-utils)
 (require 'udc-gba-codegen)
 
@@ -37,14 +38,14 @@
   (when-let* ((dest (u/gba/ir-ins-dest ins)))
     (list dest)))
 (defun u/gba/ir-ins-args (ins)
-  "Return the destination registers of INS."
+  "Return the argument registers of INS."
   (let ((op (u/gba/ir-ins-op ins)))
     (cond
       ((keywordp op)
         (cl-case op
           (:const nil)
           (:jmp nil)
-          (:br (cddr ins))
+          (:br (list (cadr ins)))
           (:return (cdr ins))
           (:phi (-map #'cdr (cddr ins)))
           (t (error "Unknown special instruction: %s" ins))))
@@ -74,12 +75,19 @@
   (term '(:unspecified-terminator))
   )
 
-(defun u/gba/ir-bb-all-regs (bb)
-  "Return all of the register indices that are used in BB."
-  (-reduce-from
-    #'seq-union
-    nil
-    (-map #'u/gba/ir-ins-args (u/gba/ir-bb-code bb))))
+(defun u/gba/ir-bb-next-use (bb idx v)
+  "Determine the position in BB where V is used after IDX.
+Return nil if it is not used."
+  (let ((rc
+          (-find-index
+              (lambda (ins)
+                (-contains? (u/gba/ir-ins-args ins) v))
+            (-drop idx (u/gba/ir-bb-code bb)))))
+    (cond
+      (rc rc)
+      ((-contains? (u/gba/ir-ins-args (u/gba/ir-bb-term bb)) v)
+        (length (u/gba/ir-bb-code bb)))
+      (t nil))))
 
 ;; Control-flow graphs
 (cl-defstruct (u/gba/ir-cfg (:constructor u/gba/make-ir-cfg))
@@ -87,6 +95,10 @@
   (next-block 0) ;; label of next block to add
   (blocks (ht-create)) ;; map from labels to basic blocks
   )
+
+(defun u/gba/ir-cfg-bb-label-keyword (b)
+  "Convert the integer B to a label keyword."
+  (intern (format ":bb%s" b)))
 
 (defun u/gba/ir-cfg-add-bb (cfg bb)
   "Add BB to CFG and return its label."
@@ -114,10 +126,14 @@
 
 (defun u/gba/ir-cfg-all-regs (cfg)
   "Return all of the register indices that are used in CFG."
-  (-reduce-from
-    #'seq-union
-    nil
-    (-map #'u/gba/ir-bb-all-regs (ht-values (u/gba/ir-cfg-blocks cfg)))))
+  (let ((ret nil))
+    (-each (ht-values (u/gba/ir-cfg-blocks cfg))
+      (lambda (bb)
+        (-each (u/gba/ir-bb-code bb)
+          (lambda (ins)
+            (--each (u/gba/ir-ins-dests ins)
+              (push it ret))))))
+    ret))
 
 ;; Data flow analysis
 (cl-defstruct (u/gba/ir-dataflow-analysis (:constructor u/gba/make-ir-dataflow-analysis))
@@ -179,7 +195,7 @@ Return a hashtable mapping each basic block label to its input value from A."
       (lambda (b x)
         (let ((bb (ht-get (u/gba/ir-cfg-blocks cfg) b)))
           (seq-difference
-            (seq-union x (--mapcat (u/gba/ir-ins-args it) (u/gba/ir-bb-code bb)))
+            (seq-union x (--mapcat (u/gba/ir-ins-args it) (cons (u/gba/ir-bb-term bb) (u/gba/ir-bb-code bb))))
             (--mapcat (u/gba/ir-ins-dests it) (u/gba/ir-bb-code bb))))))))
 
 ;; find dominators - this gives us a map from every basic block to a list of other basic blocks
@@ -214,10 +230,7 @@ Return a hashtable mapping each basic block label to its input value from A."
 (defun u/gba/ir-cfg-nextuse-block-use (bb v)
   "Determine the position in BB where V is used.
 Return nil if it is not used."
-  (-find-index
-    (lambda (ins)
-      (-contains? (u/gba/ir-ins-args ins) v))
-    (u/gba/ir-bb-code bb)))
+  (u/gba/ir-bb-next-use bb 0 v))
 (defun u/gba/ir-cfg-nextuse-block-def (bb v)
   "Determine the position in BB where V is defined.
 Return nil if it is not defined."
@@ -252,7 +265,6 @@ Return two hashmaps - one of uses after each block, one of uses before."
         :transfer
         (lambda (b a)
           (let ((bb (ht-get (u/gba/ir-cfg-blocks cfg) b)))
-            (message "%s" (ht->alist a))
             (ht<-alist
               (--map
                 (let ( (use (u/gba/ir-cfg-nextuse-block-use bb it))
@@ -281,6 +293,7 @@ Return two hashmaps - one of uses after each block, one of uses before."
   (regs (ht-create)) ;; mapping from virtual register indices to either symbols (real registers) or integers (spills)
   (next-use (ht-create)) ;; estimate of global next used location for each variable. higher = spill first
   (next-use-bb-out nil) ;; next-use map at the end of each basic block
+  (all-vars nil) ;; list of all variables defined in the CFG
   )
 
 (defun u/gba/ir-gen-next-spill (g)
@@ -299,13 +312,15 @@ This variable should be heuristically most suited to be spilled to memory.
 Return a pair of that variable and whether or not it needs to be spilled.
 For example variables that are not used in the future need not be spilled."
   (let* ( (in-regs (-map #'car (--filter (symbolp (cdr it)) (ht->alist (u/gba/ir-gen-regs g)))))
-          (candidates (seq-difference in-regs vars)))
-    ;; for now, let's just pick the first workable candidate
-    ;; in the future, we'd like to basically apply Belady's algorithm here
-    ;; using the next-use data we compute from dataflow analysis
-    (cons
-      (car candidates)
-      t)))
+          (candidates (seq-difference in-regs vars))
+          (nextuse (u/gba/ir-gen-next-use g))
+          (tagged (--map (cons it (ht-get nextuse it)) candidates)))
+    ;; picking any choice in candidates should yield working code
+    ;; however, picking the candidate that is used the furthest in the future is likely the best
+    ;; this corresponds to the variable with the entry in the next-use map that is greatest (or nil)
+    (if-let* ((unused (--first (not (cdr it)) tagged)))
+      unused
+      (car (-sort (-on #'> #'cdr) (-filter #'cdr tagged))))))
 
 (defun u/gba/ir-gen-ensure (g vars)
   "Ensure VARS are within a register in G; return those registers."
@@ -314,7 +329,7 @@ For example variables that are not used in the future need not be spilled."
       (let ( (cur (ht-get (u/gba/ir-gen-regs g) x))
              (free (u/gba/codegen-regs-available (u/gba/codegen))))
         (cond
-          ((null cur) (error "Variable %s is not defined" x))
+          ((null cur) (error "Variable %s is not necessarily defined before use" x))
           ((symbolp cur) cur) ;; x is already in register cur, return it
           ((and (integerp cur) free)
             ;; if this register is in a local and also there is a free register available, load it
@@ -336,7 +351,10 @@ For example variables that are not used in the future need not be spilled."
                   (u/gba/emit!
                     `(:swap-local ,cur ,vreg))
                   (ht-set! (u/gba/ir-gen-regs g) victim cur))
-                (ht-remove! (u/gba/ir-gen-regs g) victim)) ;; otherwise, the victim is no longer available
+                (progn ;; otherwise, the victim is no longer available
+                  (u/gba/emit!
+                    `(:get-local ,cur ,vreg))
+                  (ht-remove! (u/gba/ir-gen-regs g) victim)))
               (ht-set! (u/gba/ir-gen-regs g) x vreg)
               vreg))
           (t (error "Malformed variable: %s" x)))))
@@ -345,6 +363,7 @@ For example variables that are not used in the future need not be spilled."
 (defun u/gba/ir-gen-fresh (g var)
   "Return an available register in G, possibly spilling some variable.
 VAR will not be spilled, and will be recorded as being stored in that register."
+  (print `(fresh ,var ,(ht->alist (u/gba/ir-gen-next-use g))))
   (let ((free (u/gba/codegen-regs-available (u/gba/codegen))))
     (cond
       (free ;; if there are registers free, easy! take one!
@@ -367,78 +386,257 @@ VAR will not be spilled, and will be recorded as being stored in that register."
           (ht-set! (u/gba/ir-gen-regs g) var vreg) ;; var will be in the victim's register
           vreg)))))
 
-(defun u/gba/ir-gen-ins-update-next-use (g ins)
-  "Update next-use data for G given we just executed INS."
-  )
+(defun u/gba/ir-gen-ins-update-next-use (g cfg b idx search)
+  "Update next-use data for G given we just executed IDX in B in CFG.
+Search forward and update the variables in SEARCH"
+  (let* ( (bb (ht-get (u/gba/ir-cfg-blocks cfg) b))
+          (len (seq-length (u/gba/ir-bb-code bb)))
+          (end (ht-get (u/gba/ir-gen-next-use-bb-out g) b)) ;; map from vars -> next use at end of b
+          (nextuse (u/gba/ir-gen-next-use g))) ;; map from variables to next-use distances - update this!
+    (print `(next-use ,search ,(ht->alist nextuse)))
+    (-each (ht-keys nextuse)
+      (lambda (var)
+        (let ((old (ht-get nextuse var)))
+          (if old
+            (ht-set! nextuse var (- old 1))
+            (ht-remove! nextuse var)))))
+    (-each search
+      (lambda (var)
+        (let* ( (next (u/gba/ir-bb-next-use bb idx var))
+                (postblock (ht-get end var))
+                (new
+                  (cond
+                    (next next)
+                    (postblock (+ postblock (- len idx)))
+                    (t nil))))
+          (ht-set! nextuse var new))))
+    (-each (ht-keys nextuse)
+      (lambda (var)
+        (let ((old (ht-get nextuse var)))
+          (when (and old (< old 0))
+            (error "Variable %s has negative next-use (%s) in basic block %s (this is a bug)" var old b)))))))
 
-(defun u/gba/ir-gen-ins (g ins)
-  "Emit code for the instruction INS in G.
+(defun u/gba/ir-gen-ins (g cfg b idx)
+  "Emit code for the instruction IDX in B in CFG in the context of G.
 It is assumed that we are within a code generation context."
-  (let ((op (u/gba/ir-ins-op ins)))
+  (let* ( (bb (ht-get (u/gba/ir-cfg-blocks cfg) b))
+          (ins (seq-elt (u/gba/ir-bb-code bb) idx))
+          (op (u/gba/ir-ins-op ins)))
+    (print `(gen-ins ,b ,idx ,ins ,(ht->alist (u/gba/ir-gen-regs g))))
     (cond
       ((keywordp op)
         (cl-case op
           (:const
             (let* ( (dest (u/gba/ir-ins-dest ins))
                     (dreg (u/gba/ir-gen-fresh g dest)))
+              (print `(const ,dest ,dreg))
               (u/gba/emit! `(:const ,dreg ,(caddr ins)))))
           (:jmp (error "Found jmp instruction in block body"))
           (:br (error "Found br instruction in block body"))
           (:return (error "Found return instruction in block body"))
           (:phi nil)
-          (t (error "Unknown special instruction: %s" ins))))
+          (t (error "Unknown special instruction: %s" ins)))
+        (u/gba/ir-gen-ins-update-next-use g cfg b (+ idx 1) (u/gba/ir-ins-args ins)))
       ((symbolp op)
         (let* ( (args (u/gba/ir-ins-args ins))
                 (dest (u/gba/ir-ins-dest ins))
                 ;; before we generate code for the instruction, ensure all args are in registers
                 (aregs (u/gba/ir-gen-ensure g args))
+                (_ (u/gba/ir-gen-ins-update-next-use g cfg b (+ idx 1) (u/gba/ir-ins-args ins)))
                 ;; we also need a place to put the result, so get a register for that too (maybe spilling)
                 (dreg (u/gba/ir-gen-fresh g dest)))
           (funcall (u/gba/ir-gen-op g) op dreg aregs) ;; actually produce code
           ))
       (t (error "Malformed instruction: %s" ins)))))
 
-(defun u/gba/ir-gen-bb (g bb)
-  "Emit code for the basic block BB in G.
+(defun u/gba/ir-gen-bb (g cfg b)
+  "Emit code for the basic block B in CFG in G.
 It is assumed that we are within a code generation context."
-  (-each (u/gba/ir-bb-code bb)
-    (lambda (ins)
-      (u/gba/ir-gen-ins g ins)
-      )))
+  (let ((bb (ht-get (u/gba/ir-cfg-blocks cfg) b)))
+    (setf (u/gba/ir-gen-next-use g) (ht-create))
+    (u/gba/ir-gen-ins-update-next-use g cfg b 0 (u/gba/ir-gen-all-vars g))
+    (-each-indexed (u/gba/ir-bb-code bb)
+      (lambda (idx _)
+        (u/gba/ir-gen-ins g cfg b idx)
+        ))))
+
+(defun u/gba/ir-gen-bb-successor-correct (g cfg b ex)
+  "Emit code correcting register placements in B in CFG in G.
+EX in a map from basic blocks to maps from variables to locations."
+  (print `(correct ,(ht->alist ex)))
+  (let ((current (u/gba/ir-gen-regs g)))
+    (-each (u/gba/ir-cfg-successors cfg b) ;; for every successor to this block
+      (lambda (sb)
+        (when-let* ((allexpected (ht-get ex sb)))
+          (-each (ht->alist allexpected) ;; for every variable that we originally expected for this successor
+            (-lambda ((v . expected))
+              ;; we only need parts of the variable layout that we'll actually use
+              (when (ht-get (u/gba/ir-gen-next-use g) v)
+                (let ( (actual (or (ht-get current v) (error "Need to fix variable %s, but we forgot it!" v)))
+                       (vex (car (ht-find (lambda (_ it) (equal it expected)) current))))
+                  (print `(correction ,v (actual ,actual) ,vex (expected ,expected)))
+                  (ht-set! current v expected)
+                  (ht-set! current vex actual)
+                  (cond ;; now swap the actual and expected locations
+                    ;; TODO: we can optimize this further by checking next-use for vex
+                    ((equal actual expected) nil)
+                    ((symbolp actual)
+                      (cond
+                        ((symbolp expected)
+                          (u/gba/emit!
+                            `(:swap ,expected ,actual)))
+                        ((integerp expected)
+                          (u/gba/emit!
+                            `(:swap-local ,expected ,actual)))))
+                    ((integerp actual)
+                      (cond
+                        ((symbolp expected)
+                          (u/gba/emit!
+                            `(:swap-local ,actual ,expected)))
+                        ((integerp expected)
+                          (ht-remove! current vex)
+                          (u/gba/emit!
+                            `(:swap-local ,actual r0)
+                            `(:set-local ,expected r0)
+                            `(:swap-local ,actual r0)))))))))))))))
+
+(defun u/gba/ir-gen-term (g cfg term follow)
+  "Emit code for TERM in CFG in G.
+Assume that the next block to be generated is labeled FOLLOW."
+  (ignore cfg)
+  (print `(gen-term ,term))
+  (let* ( (op (u/gba/ir-ins-op term))
+          (args (cdr term)))
+    (cond
+      ((keywordp op)
+        (cl-case op
+          (:jmp ;; jumps are relatively simple: check if the target follows us immediately. if no, emit a jump
+            (let ((target (car args)))
+              (unless (= follow target)
+                (u/gba/emit! `(:jmp ,(u/gba/ir-cfg-bb-label-keyword target))))))
+          (:br ;; we need to translate branches into single-target "jmptrue"s, closer to the hardware instruction
+            (-let* ( ((c then else) args)
+                     (creg (car (u/gba/ir-gen-ensure g (list c)))))
+              (cond
+                ((= then follow)
+                  ;; if the then block follows us, we need to jump to the else block if the condition is false
+                  ;; (otherwise, we fall through to the then case)
+                  (u/gba/emit! `(:jmpfalse ,creg ,(u/gba/ir-cfg-bb-label-keyword else))))
+                ((= else follow)
+                  ;; if the else block follows, we need to jump to the then block if the condition is true
+                  (u/gba/emit! `(:jmptrue ,creg ,(u/gba/ir-cfg-bb-label-keyword then))))
+                (t ;; if neither block follows us, we need to generate multiple jumps
+                  (u/gba/emit!
+                    `(:jmptrue ,creg ,(u/gba/ir-cfg-bb-label-keyword then))
+                    `(:jmpfalse ,creg ,(u/gba/ir-cfg-bb-label-keyword else)))))))
+          (:return ;; returns always just emit a return
+            (let ((rval (car (u/gba/ir-gen-ensure g args))))
+              (u/gba/emit! `(:return ,rval))))
+          (t (error "Unknown terminator: %s" term))))
+      (t (error "Malformed terminator: %s" term)))))
 
 (defun u/gba/ir-gen-cfg (g cfg)
   "Emit code for CFG in G.
 It is assumed that we are within a code generation context."
   (setf (u/gba/ir-gen-next-use-bb-out g)
     (car (u/gba/ir-cfg-nextuse cfg)))
-  (--each (ht-values (u/gba/ir-cfg-blocks cfg))
-    (u/gba/ir-gen-bb g it)))
-  ;; (let ((blocks (ht-copy (u/gba/ir-cfg-blocks cfg))))
-  ;;   ))
-  
+  (-each (ht-values (u/gba/ir-cfg-blocks cfg))
+    (lambda (bb)
+      (-each (u/gba/ir-bb-code bb)
+        (lambda (ins)
+          (--each (u/gba/ir-ins-dests ins)
+            (push it (u/gba/ir-gen-all-vars g)))))))
+  (let ( (upcoming (make-queue))
+         (processed (ht-create))
+         (expected (ht-create))
+         (pterm nil))
+    (queue-enqueue upcoming (cons (u/gba/ir-cfg-entry cfg) (ht-create)))
+    (while (not (queue-empty upcoming))
+      (-let [(b . regs) (queue-dequeue upcoming)]
+        (setf (u/gba/ir-gen-regs g) regs)
+        (unless (ht-contains? processed b) ;; only emit each block once
+          (ht-set! processed b t) ;; when we first generate a block, save the registers we expected
+          (when pterm ;; if the previous block set a terminator
+            (u/gba/ir-gen-term g cfg pterm b)
+            (setf pterm nil))
+          (u/gba/emit! (u/gba/ir-cfg-bb-label-keyword b)) ;; label for the block
+          (u/gba/ir-gen-bb g cfg b) ;; main block code (terminator will be emitted on the next iteration)
+          (setf pterm (u/gba/ir-bb-term (ht-get (u/gba/ir-cfg-blocks cfg) b)))
+          ;; finally, we need to "correct" the placement of variables if we've already generated any of the
+          ;; successors (and therefore have existing expectations re: what should be where)
+          (u/gba/ir-gen-bb-successor-correct g cfg b expected)
+          (--each (u/gba/ir-cfg-successors cfg b) ;; try to generate all successors
+            (-let [sregs (ht-copy (u/gba/ir-gen-regs g))]
+              (ht-set! expected it sregs)
+              (queue-enqueue upcoming (cons it sregs)))))))
+    (when pterm ;; if the final block set a terminator
+      (u/gba/ir-gen-term g cfg pterm -1))))
 
 ;; Test code
+;; our algorithm is fundamentally broken
+;; we really don't handle branching well
+;; right now, we pre-emptively discard variables when they aren't visible in the next use
+;; this is a problem because of a mismatch between the next-use info and the regs variable
+;; regs is updated /linearly/, as we write successive basic blocks
+;; while next-use info relates to the graph structure of the blocks
+;; we could do something like e.g. attaching the current regs variable to the block queue (we tried this)
+;; but this is totally incorrect - regs is bookkeeping meant to reflect the actual locations of variables,
+;; and if a block has multiple predecessors, it is arbitrary which will place the block in the queue first
+;; (and therefore leaving it with incorrect regs bookkeeping)
+;; we need to study the literature a bit more to determine how to resolve this, maybe.
+;; one easy and promising prospect is perhaps to just never discard variables, and instead always spill to a local?
+;; and then we can strip out unnecessary spills afterward
+;; this is probably guaranteed to be correct, at least?
+;; fundamentally spilling everything is correct; the problem here is entirely that we're aggressively discarding
+;; variables that we think we no longer need
+;; honestly we should really just implement the "proper" thing with the W^entry sets in 4.3 of braun09cc
+;; an idea: let's do that "greedily"!
+;; the first time we encounter an edge to the block, copy the register map
+;; when we subsequently encounter an edge to that block, take the intersection between that map and the new map,
+;; and generate code to ensure that the shared variables are in the same registers? this probably works
 (progn
   (setf test-bb-cfg (u/gba/make-ir-cfg))
   (u/gba/ir-cfg-add-bb test-bb-cfg
     (u/gba/make-ir-bb
       :code
-      '( (:const 0 10)
-         (:const 1 20)
-         (:const 2 30)
-         (sub 3 2 1)
-         (add 4 3 0)
+      '( (:const 5 30)
+         (:const 6 40)
+         (:const 8 20)
          )
       :term
-      '(:return 0)))
+      '(:br 6 1 2)))
+  (u/gba/ir-cfg-add-bb test-bb-cfg
+    (u/gba/make-ir-bb
+      :code
+      '( (:const 0 10)
+         (:const 1 20)
+         (sub 2 1 0)
+         (add 3 1 5)
+         )
+      :term
+      '(:jmp 2)))
+  (u/gba/ir-cfg-add-bb test-bb-cfg
+    (u/gba/make-ir-bb
+      :code
+      '( (add 7 6 5)
+         )
+      :term
+      '(:jmp 0)))
   )
 
 (defun c/test-gen ()
   (let ((u/gba/codegen (u/gba/make-codegen :type 'thumb))
          (gen (u/gba/make-ir-gen)))
-    (u/gba/claim! 'r3 'r4 'r5)
+    (u/gba/claim! 'r4 'r5)
     (u/gba/ir-gen-cfg gen test-bb-cfg)
     (reverse (u/gba/codegen-instructions (u/gba/codegen)))))
+
+(defun c/test-gen-extract ()
+  (let ((u/gba/codegen (u/gba/make-codegen :type 'thumb))
+         (gen (u/gba/make-ir-gen)))
+    (u/gba/claim! 'r4 'r5)
+    (u/gba/ir-gen-cfg gen test-bb-cfg)
+    (u/gba/codegen-extract)))
 
 (progn
   (setf test-cfg (u/gba/make-ir-cfg))

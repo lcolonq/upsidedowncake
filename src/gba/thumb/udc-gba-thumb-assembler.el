@@ -42,7 +42,8 @@
 (defun u/gba/thumb-assemble-reg (reg)
   "Given REG, return its 3-bit encoding."
   (cl-case reg
-    (r0 0) (r1 1) (r2 2) (r3 3) (r4 4) (r5 5) (r6 6) (r7 7)))
+    (r0 0) (r1 1) (r2 2) (r3 3) (r4 4) (r5 5) (r6 6) (r7 7)
+    (t (error "Invalid register: %s" reg))))
 
 (defun u/gba/thumb-assemble-imm (x)
   "Return the value for X if X is an immediate."

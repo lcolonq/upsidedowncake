@@ -88,14 +88,20 @@
   '(inc r7 1)
   '(b :thumb-test))
 
+(u/gba/thumb-function kyu/syms :ir-test
+  (u/gba/burn! 'r4 'r5 'r6)
+  (u/gba/claim! 'r4 'r5)
+  (u/gba/ir-gen-cfg (u/gba/make-ir-gen) test-bb-cfg))
+
 (u/gba/arm-toplevel kyu/syms :main
   (u/gba/claim! 'r0 'r1 'r2 'r3)
   '(:const r0 #xdeadbeef)
+  '(:const r1 #xcafebabe)
 
-  ;; (let ((r (u/gba/arm-loc kyu/syms :thumb-test)))
-  ;;   (u/gba/emit!
-  ;;     `(add ,r ,r 1)
-  ;;     `(bx ,r)))
+  (let ((r (u/gba/arm-loc kyu/syms :ir-test)))
+    (u/gba/emit!
+      `(add ,r ,r 1)
+      `(bx ,r)))
 
   (u/gba/arm-call kyu/syms :wordcpy 8
     :data-palette-map :palette-bg)

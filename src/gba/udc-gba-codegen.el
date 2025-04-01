@@ -30,11 +30,11 @@
   (or u/gba/codegen (error "Code generation context is not bound")))
 (defun u/gba/codegen-replace-pseudo (ins idx)
   "Replace INS if it is a pseudo-instruction at IDX."
-  (let ((op (car ins)))
+  (let ( (op (car ins))
+         (ty (u/gba/codegen-type (u/gba/codegen))))
     (cl-case op
-      (:const
-        (let* ( (ty (u/gba/codegen-type (u/gba/codegen)))
-                (rd (cadr ins))
+      (:const ;; constant in the literal pool
+        (let* ( (rd (cadr ins))
                 (lit (caddr ins))
                 (loc
                   (if-let* ((cur (ht-get (u/gba/literals-offsets (u/gba/codegen-literals (u/gba/codegen))) lit)))
@@ -47,13 +47,59 @@
                       (ht-set (u/gba/literals-offsets (u/gba/codegen-literals (u/gba/codegen))) lit cur)
                       (incf (u/gba/literals-pool (u/gba/codegen-literals (u/gba/codegen))) 4)
                       cur)))
-                (insoff (+ 1 idx))
-                (litoff (+ (length (u/gba/codegen-instructions (u/gba/codegen))) loc)))
+                (inslen (cl-case ty (arm 4) (thumb 2) (t (error "Unknown assembly type: %s" ty))))
+                (insoff (logand #b11111111111111111111111111111100 (* inslen idx)))
+                (litoff (+ (* inslen (+ 1 (length (u/gba/codegen-instructions (u/gba/codegen))))) loc)))
+        (message "%s" `(literal ,ins ,inslen ,insoff ,litoff ,loc))
           (cl-case ty
-            (arm `(ldr ,rd ,u/gba/pc ,(* 4 (- litoff insoff 1))))
-            (thumb (error "Unimplemented literal pool usage in Thumb"))
+            (arm `((ldr ,rd ,u/gba/pc ,(- litoff insoff 12))))
+            (thumb `((ldrpc ,rd ,(/ (- litoff insoff) 4))))
             (t (error "Unknown assembly type: %s" ty)))))
-      (t ins))))
+      (:swap ;; swap registers
+        (cl-case ty
+          (arm
+            `( (mov ,u/gba/scratch ,(cadr ins))
+               (mov ,(cadr ins) ,(caddr ins))
+               (mov ,(caddr ins) ,u/gba/scratch)))
+          (thumb
+            `( (mov ,u/gba/scratch ,(cadr ins))
+               (mov ,(cadr ins) ,(caddr ins))
+               (mov ,(caddr ins) ,u/gba/scratch)))
+          (t (error "Unknown assembly type: %s" ty))))
+      (:set-local ;; write memory at offset from stack frame
+        (cl-case ty
+          (arm `((str ,(caddr ins) ,u/gba/arm-fp ,(* 4 (cadr ins)))))
+          (thumb `((stri ,(caddr ins) ,u/gba/thumb-fp ,(cadr ins))))
+          (t (error "Unknown assembly type: %s" ty))))
+      (:get-local ;; write memory at offset from stack frame
+        (cl-case ty
+          (arm `((ldr ,(caddr ins) ,u/gba/arm-fp ,(* 4 (cadr ins)))))
+          (thumb `((ldri ,(caddr ins) ,u/gba/thumb-fp ,(cadr ins))))
+          (t (error "Unknown assembly type: %s" ty))))
+      (:jmp ;; unconditional jump
+        (cl-case ty
+          (arm `((b ,(cadr ins))))
+          (thumb `((b ,(cadr ins))))
+          (t (error "Unknown assembly type: %s" ty))))
+      (:jmptrue ;; conditional jump (if true)
+        (cl-case ty
+          (arm
+            `( (cmp s r0 ,(cadr ins) 0)
+               (b eq ,(caddr ins))))
+          (thumb
+            `( (cmpi ,(cadr ins) 0)
+               (beq ,(caddr ins))))
+          (t (error "Unknown assembly type: %s" ty))))
+      (:jmpfalse ;; conditional jump (if false)
+        (cl-case ty
+          (arm
+            `( (cmp s r0 ,(cadr ins) 0)
+               (b ne ,(caddr ins))))
+          (thumb
+            `( (cmpi ,(cadr ins) 0)
+               (bne ,(caddr ins))))
+          (t (error "Unknown assembly type: %s" ty))))
+      (t (list ins)))))
 (defun u/gba/codegen-replace-local-labels (ins idx)
   "Replace local labels from the current codegen context in INS at IDX."
   (--map
@@ -63,16 +109,14 @@
         (- laboff insoff 1))
       it)
     ins))
-(defun u/gba/codegen-transform (pins idx)
-  "Transform the pseudo-instruction PINS at IDX to an instruction."
-  (-> pins
-    (u/gba/codegen-replace-pseudo idx)
-    (u/gba/codegen-replace-local-labels idx)))
 (defun u/gba/codegen-extract ()
   "Extract the generated code from the current codegen context."
   (--map-indexed
-    (u/gba/codegen-transform it it-index)
-    (reverse (u/gba/codegen-instructions (u/gba/codegen)))))
+    (u/gba/codegen-replace-local-labels it it-index)
+    (apply #'-concat
+      (--map-indexed
+        (u/gba/codegen-replace-pseudo it it-index)
+        (reverse (u/gba/codegen-instructions (u/gba/codegen)))))))
 (defun u/gba/codegen-extract-with-literals (symtab section sym)
   "Extract the generated code and literals from the current codegen context.
 Place the resulting code in SYMTAB at SYM in SECTION."
@@ -103,6 +147,7 @@ Registers from the enclosing scope will be available."
 
 (defun u/gba/emit! (&rest ins)
   "Emit INS to the current codegen context."
+  (print `(emit ,ins))
   (--each ins
     (cond
       ((null it) nil)
@@ -113,12 +158,7 @@ Registers from the enclosing scope will be available."
       ((listp (car it))
         (apply #'u/gba/emit! it))
       ((symbolp (car it))
-        (let ((op (or (car it) (error "Emitting instruction with nil opcode"))))
-          (cl-case op
-            (const
-              (let ((rd (or (cadr it) (error "Malformed const pseudo-instruction"))))
-                (push `(:const ,rd ,(caddr it)) (u/gba/codegen-instructions (u/gba/codegen)))))
-            (t (push it (u/gba/codegen-instructions (u/gba/codegen)))))))
+        (push it (u/gba/codegen-instructions (u/gba/codegen))))
       (t
         (error "Emitted malformed instruction: %s" it)))))
 (defmacro u/gba/emit-body! (&rest body)

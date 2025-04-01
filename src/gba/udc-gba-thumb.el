@@ -3,6 +3,7 @@
 ;;; Code:
 
 (require 'udc-gba-thumb-assembler)
+(require 'udc-gba-thumb-helpers)
 
 (provide 'udc-gba-thumb)
 ;;; udc-gba-thumb.el ends here
