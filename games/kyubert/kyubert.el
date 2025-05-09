@@ -75,7 +75,7 @@
   (u/gba/arm-get16 kyu/syms 'r1 :reg-ifbios)
   '(orr r0 r0 r1)
   (u/gba/arm-set16 kyu/syms :reg-ifbios 'r0)
-  `(bx ,u/gba/lr))
+  `(bx ,u/gba/arm-lr))
 
 (u/gba/arm-function kyu/syms :enable-interrupts
   (u/gba/arm-set32 kyu/syms :reg-intaddr (u/gba/symtab-entry-addr (u/gba/symtab-lookup kyu/syms :interrupt-handler)))
@@ -88,8 +88,9 @@
   '(inc r7 1)
   '(b :thumb-test))
 
-(u/gba/thumb-function kyu/syms :ir-test
-  (u/gba/burn! 'r4 'r5 'r6)
+;; (u/gba/thumb-function kyu/syms :ir-test
+(u/gba/toplevel kyu/syms :code :ir-test 'thumb
+  ;; (u/gba/burn! 'r4 'r5 'r6)
   (u/gba/claim! 'r4 'r5)
   (u/gba/ir-gen-cfg (u/gba/make-ir-gen) test-bb-cfg))
 
