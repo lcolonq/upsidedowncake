@@ -334,6 +334,7 @@ For example variables that are not used in the future need not be spilled."
           ((and (integerp cur) free)
             ;; if this register is in a local and also there is a free register available, load it
             (let ((r (u/gba/fresh!)))
+              (print "getting local")
               (u/gba/emit! `(:get-local ,r ,cur))
               (ht-set! (u/gba/ir-gen-regs g) x r)
               r))
@@ -352,6 +353,7 @@ For example variables that are not used in the future need not be spilled."
                     `(:swap-local ,cur ,vreg))
                   (ht-set! (u/gba/ir-gen-regs g) victim cur))
                 (progn ;; otherwise, the victim is no longer available
+                  (print "getting local 2")
                   (u/gba/emit!
                     `(:get-local ,cur ,vreg))
                   (ht-remove! (u/gba/ir-gen-regs g) victim)))

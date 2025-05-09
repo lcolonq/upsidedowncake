@@ -26,15 +26,6 @@ No registers will be available."
   "Generate a pop of REGS to the stack."
   (u/gba/emit!
    `(ldm wb post ,u/gba/arm-sp ,regs)))
-(defun u/gba/arm-function-header ()
-  "Generate the function header."
-  (u/gba/arm-push u/gba/arm-lr u/gba/arm-fp)
-  (u/gba/emit! `(mov ,u/gba/arm-fp ,u/gba/arm-sp)))
-(defun u/gba/arm-function-footer ()
-  "Generate the function footer."
-  (u/gba/emit! `(mov ,u/gba/arm-sp ,u/gba/arm-fp))
-  (u/gba/arm-pop u/gba/arm-lr u/gba/arm-fp)
-  (u/gba/emit! `(bx ,u/gba/arm-lr)))
 (defmacro u/gba/arm-function (symtab sym &rest body)
   "Run BODY in a new code generation context.
 Place the generated code in SYMTAB at SYM.
@@ -45,12 +36,8 @@ Callee-saved registers will be available."
             (u/gba/make-codegen
               :type 'arm
               :regs-available (copy-sequence u/gba/arm-regs-callee-saved))))
-     (u/gba/arm-function-header)
-     (apply #'u/gba/arm-push u/gba/arm-regs-callee-saved)
      (u/gba/emit! ,@body)
-     (apply #'u/gba/arm-pop u/gba/arm-regs-callee-saved)
-     (u/gba/arm-function-footer)
-     (u/gba/codegen-extract-with-literals ,symtab :code ,sym)))
+     (u/gba/codegen-extract-with-literals ,symtab :code ,sym t)))
 
 (defun u/gba/arm-constant (r constant)
   "Generate code loading the (maximum 32-bit CONSTANT) into R."
