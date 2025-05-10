@@ -39,6 +39,9 @@
     (gt #b1100) (le #b1101)
     (al #b1110)))
 
+(defun u/gba/thumb-reg? (reg)
+  "Return non-nil if REG is a register."
+  (-contains? '(r0 r1 r2 r3 r4 r5 r6 r7) reg))
 (defun u/gba/thumb-assemble-reg (reg)
   "Given REG, return its 3-bit encoding."
   (cl-case reg
@@ -273,11 +276,15 @@
 
 (defun u/gba/thumb-assemble-ins-branchlink (h offset)
   "Given H and OFFSET produce 2 bytes."
-  (u/split16le
-    (logior
+  (print `(bl ,h ,offset))
+  (let* ((offbytes (* (+ offset 2) 4))
+         (lo (logand (ash offbytes -1) #b11111111111))
+         (hi (logand (ash offbytes -12) #b11111111111)))
+    (u/split16le
+     (logior
       (lsh #b1111 12)
       (lsh (u/gba/thumb-assemble-flag h) 11)
-      (logand #b11111111111 offset))))
+      (logand #b11111111111 (if h lo hi))))))
 
 (defun u/gba/thumb-render-op (op)
   "Convert the symbol OP to a mnemonic string."

@@ -234,7 +234,7 @@ UPLEFT and UPRIGHT are non-nil when there is a cube in that position."
 (u/gba/symtab-add! kyu/syms :header :header 'const
   (u/gba/header (u/gba/make-header :entry :main :title "kyubert" :code "kbrt" :maker "lq")))
 (setq
-  c/c-gdb-symbols
+  colonq/c-gdb-symbols
   (--map
     (cons (format "%s" (car it)) (format "0x%x" (u/gba/symtab-entry-addr (cdr it))))
     (ht->alist (u/gba/symtab-symbols kyu/syms))))

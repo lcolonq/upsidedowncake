@@ -104,7 +104,7 @@ Return nil if it is not used."
   "Add BB to CFG and return its label."
   (let ((idx (u/gba/ir-cfg-next-block cfg)))
     (ht-set! (u/gba/ir-cfg-blocks cfg) idx bb)
-    (incf (u/gba/ir-cfg-next-block cfg))
+    (cl-incf (u/gba/ir-cfg-next-block cfg))
     idx))
 
 (defun u/gba/ir-cfg-successors (cfg b)

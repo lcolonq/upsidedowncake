@@ -51,7 +51,7 @@ LEN is the total number of instructions being generated."
                               (reverse (u/split32le lit))
                               (u/gba/literals-bytes (u/gba/codegen-literals (u/gba/codegen)))))
                           (ht-set (u/gba/literals-offsets (u/gba/codegen-literals (u/gba/codegen))) lit cur)
-                          (incf (u/gba/literals-pool (u/gba/codegen-literals (u/gba/codegen))) 4)
+                          (cl-incf (u/gba/literals-pool (u/gba/codegen-literals (u/gba/codegen))) 4)
                           cur)))
                     (inslen (cl-case ty (arm 4) (thumb 2) (t (error "Unknown assembly type: %s" ty))))
                     (pcoff (cl-case ty (arm 1) (thumb 2) (t (error "Unknown assembly type: %s" ty))))
