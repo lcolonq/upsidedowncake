@@ -66,11 +66,13 @@
   (let ((res (ht-get (u/gba/symtab-symbols symtab) name)))
     (or res (error "Could not find symbol: %s" name))))
 
-(defun u/gba/symtab-lookup-relative (symtab base name)
-  "Return the word offset of NAME in SYMTAB given the word offset BASE."
+(defun u/gba/symtab-lookup-relative (inssz symtab base name)
+  "Return the word offset of NAME in SYMTAB given the word offset BASE.
+Instructions are sized at INSSZ."
   (when-let*
     ((ent (u/gba/symtab-lookup symtab name))
-      (addrword (/ (u/gba/symtab-entry-addr ent) 4)))
+      (addrword (/ (u/gba/symtab-entry-addr ent) inssz)))
+    (message "replacing %s (at word %s) with %s (base %s)" name addrword (- addrword base 2) base)
     (- addrword base 2)))
 
 ;;;; Known addresses in most symbol tables
@@ -143,21 +145,23 @@
     (u/gba/symtab-add-entry! symtab :oam (u/gba/make-symtab-entry :addr #x07000000 :type 'var :data 1024))
     symtab))
 ;;;; Linker and header generation
-(defun u/gba/relocate-ins (symtab idx ins)
+(defun u/gba/relocate-ins (inssz symtab idx ins)
   "Replace all keywords in INS by looking up relative addresses in SYMTAB.
-We assume that this instruction is at word IDX in memory."
+We assume that this instruction is at word IDX in memory.
+Instructions are sized at INSSZ."
   (--map
     (if (keywordp it)
-      (if-let* ((ent (u/gba/symtab-lookup-relative symtab idx it)))
+      (if-let* ((ent (u/gba/symtab-lookup-relative inssz symtab idx it)))
         ent
         (error "Unknown symbol: %s" it))
       it)
     ins))
 
-(defun u/gba/relocate (symtab base prog)
+(defun u/gba/relocate (inssz symtab base prog)
   "Replace all keywords in PROG by looking up relative addresses in SYMTAB.
-We assume that PROG starts in memory at word BASE."
-  (--map-indexed (u/gba/relocate-ins symtab (+ base it-index) it) prog))
+We assume that PROG starts in memory at word BASE.
+Instructions are sized at INSSZ."
+  (--map-indexed (u/gba/relocate-ins inssz symtab (+ base it-index) it) prog))
 
 (defun u/gba/link (symtab base size)
   "Convert SYMTAB to a vector of bytes to be placed at address BASE.
@@ -176,11 +180,11 @@ SIZE is the length of the resulting vector."
               (idx (- addr base)))
         (cl-case type
           (arm
-            (let* ((relocated (u/gba/relocate symtab (/ addr 4) (u/gba/symtab-entry-data entry)))
+            (let* ((relocated (u/gba/relocate 4 symtab (/ addr 4) (u/gba/symtab-entry-data entry)))
                     (bytes (u/gba/arm-assemble relocated)))
               (funcall memwrite name addr idx bytes)))
           (thumb
-            (let* ((relocated (u/gba/relocate symtab (/ addr 4) (u/gba/symtab-entry-data entry)))
+            (let* ((relocated (u/gba/relocate 2 symtab (/ addr 2) (u/gba/symtab-entry-data entry)))
                     (bytes (u/gba/thumb-assemble relocated)))
               (funcall memwrite name addr idx bytes)))
           (bytes
@@ -205,7 +209,7 @@ SIZE is the length of the resulting vector."
   (lambda (symtab addr)
     (-concat
       (u/gba/arm-assemble-ins ;; place an ARM jump to entrypoint at the start
-        `(b ,(or (u/gba/symtab-lookup-relative symtab (/ addr 4) (u/gba/header-entry header)) -2)))
+        `(b ,(or (u/gba/symtab-lookup-relative 4 symtab (/ addr 4) (u/gba/header-entry header)) -2)))
       (u/pad-to 156 '()) ;; nintendo logo
       (u/pad-to 12 (seq-into (s-upcase (u/gba/header-title header)) 'list) #x00) ;; game title
       (u/pad-to 4 (seq-into (s-upcase (u/gba/header-code header)) 'list) #x00) ;; game code

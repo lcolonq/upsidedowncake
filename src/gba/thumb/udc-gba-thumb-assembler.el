@@ -176,7 +176,7 @@
       (lsh (u/gba/thumb-assemble-reg base) 3)
       (u/gba/thumb-assemble-reg dest))))
 
-(defun u/gba/thumb-assemble-ins-loadstoreimmediate (byte load offset base dest)
+(defun u/gba/thumb-assemble-ins-loadstoreimmediate (load byte offset base dest)
   "Given LOAD, BYTE, OFFSET, BASE, and DEST produce 2 bytes."
   (u/split16le
     (logior
@@ -276,10 +276,10 @@
 
 (defun u/gba/thumb-assemble-ins-branchlink (h offset)
   "Given H and OFFSET produce 2 bytes."
-  (print `(bl ,h ,offset))
-  (let* ((offbytes (* (+ offset 2) 4))
+  (let* ((offbytes (* (if h (+ offset 1) offset) 2))
          (lo (logand (ash offbytes -1) #b11111111111))
          (hi (logand (ash offbytes -12) #b11111111111)))
+    (print `(branchlink ,h ,offset ,lo ,hi))
     (u/split16le
      (logior
       (lsh #b1111 12)

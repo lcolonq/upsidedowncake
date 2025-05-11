@@ -179,7 +179,6 @@ The locations in ARGS are copied to the argument registers."
     (error "Attempted to call function %s with too many (%s) arguments: %s" sym (length args) args))
   (u/gba/emit!
     (u/gba/scope
-      (apply #'u/gba/burn! (-take (length args) u/gba/regs-arg))
       (--each (-zip-pair args u/gba/regs-arg)
         (let ((x (car it)))
           (cond

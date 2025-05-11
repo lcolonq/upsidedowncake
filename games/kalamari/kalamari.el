@@ -50,11 +50,9 @@
   )
 
 (u/gba/thumb-toplevel k/syms :mainloop
-  `(bl0 :update) `(bl1 :update)
-  ;; (u/gba/arm-call k/syms :update) ;; update game state
-  ;; `(swi ,(ash #x05 16)) ;; VBlankIntrWait BIOS function, remember to shift in ARM!
+  (u/gba/thumb-call k/syms :update) ;; update game state
   `(swi #x05) ;; VBlankIntrWait BIOS function, remember to shift in ARM!
-  ;; (u/gba/arm-call k/syms :render) ;; reflect game state in VRAM immediately after vblank
+  (u/gba/thumb-call k/syms :render) ;; reflect game state in VRAM immediately after vblank
   '(b :mainloop))
 
 (u/gba/arm-toplevel k/syms :main
@@ -67,17 +65,24 @@
 
 ;;;;; Game logic
 (u/gba/thumb-function k/syms :update
-  '(inc r6 1)
-  )
+  (-let [r (u/gba/fresh!)]
+    (u/gba/thumb-get32 k/syms r :var-test)
+    (u/gba/emit!
+      `(inc ,r 1)
+      `(inc ,r 1)
+      `(inc ,r 1)
+      `(inc ,r 1)
+      `(inc ,r 1))
+    (u/gba/thumb-set32 k/syms :var-test r)))
 
-(u/gba/arm-function k/syms :render
+(u/gba/thumb-function k/syms :render
   nil)
 
 ;;;;; Generate ROM
 (u/gba/symtab-add! k/syms :header :header 'const
   (u/gba/header (u/gba/make-header :entry :main :title "kalamari" :code "klmr" :maker "lq")))
 (setq
-  colonq/c-gdb-symbols
+  c/c-gdb-symbols
   (--map
     (cons (format "%s" (car it)) (format "0x%x" (u/gba/symtab-entry-addr (cdr it))))
     (ht->alist (u/gba/symtab-symbols k/syms))))
