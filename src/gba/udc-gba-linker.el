@@ -166,36 +166,48 @@ Instructions are sized at INSSZ."
 (defun u/gba/link (symtab base size)
   "Convert SYMTAB to a vector of bytes to be placed at address BASE.
 SIZE is the length of the resulting vector."
-  (let* ((mem (make-vector size 0))
-          (memwrite
-            (lambda (name addr idx bytes)
-              (if (and (>= idx 0) (< (+ idx (length bytes)) size))
-                (u/write! mem idx bytes)
-                (warn "Symbol table entry %s at %s is out of bounds" name addr)))))
-    (--each (ht->alist (u/gba/symtab-symbols symtab))
-      (let* ((name (car it))
-              (entry (cdr it))
-              (type (u/gba/symtab-entry-type entry))
-              (addr (u/gba/symtab-entry-addr entry))
-              (idx (- addr base)))
-        (cl-case type
-          (arm
-            (let* ((relocated (u/gba/relocate 4 symtab (/ addr 4) (u/gba/symtab-entry-data entry)))
-                    (bytes (u/gba/arm-assemble relocated)))
-              (funcall memwrite name addr idx bytes)))
-          (thumb
-            (let* ((relocated (u/gba/relocate 2 symtab (/ addr 2) (u/gba/symtab-entry-data entry)))
-                    (bytes (u/gba/thumb-assemble relocated)))
-              (funcall memwrite name addr idx bytes)))
-          (bytes
-            (funcall memwrite name addr idx (u/gba/symtab-entry-data entry)))
-          (var nil)
-          (const
-            (funcall
-              memwrite name addr idx
-              (funcall (u/gba/symtab-entry-data entry) symtab addr)))
-          (t (error "Unknown symbol table entry type: %s" (u/gba/symtab-entry-type it))))))
-    mem))
+  (condition-case res
+    (let* ((mem (make-vector size 0))
+            (memwrite
+              (lambda (name addr idx bytes)
+                (if (and (>= idx 0) (< (+ idx (length bytes)) size))
+                  (u/write! mem idx bytes)
+                  (warn "Symbol table entry %s at %s is out of bounds" name addr)))))
+      (--each (ht->alist (u/gba/symtab-symbols symtab))
+        (let* ( (name (car it))
+                (entry (cdr it))
+                (type (u/gba/symtab-entry-type entry))
+                (addr (u/gba/symtab-entry-addr entry))
+                (idx (- addr base)))
+          (cl-case type
+            (arm
+              (condition-case err
+                (let* ((relocated (u/gba/relocate 4 symtab (/ addr 4) (u/gba/symtab-entry-data entry)))
+                        (bytes (u/gba/arm-assemble relocated)))
+                  (funcall memwrite name addr idx bytes))
+                (error
+                  (error "While assembling ARM code at %s\n%s" name (cadr err)))))
+            (thumb
+              (condition-case err
+                (let* ((relocated (u/gba/relocate 2 symtab (/ addr 2) (u/gba/symtab-entry-data entry)))
+                        (bytes (u/gba/thumb-assemble relocated)))
+                  (funcall memwrite name addr idx bytes))
+                (error
+                  (error "While assembling Thumb code at %s\n%s" name (cadr err)))))
+            (bytes
+              (funcall memwrite name addr idx (u/gba/symtab-entry-data entry)))
+            (var nil)
+            (const
+              (funcall
+                memwrite name addr idx
+                (funcall (u/gba/symtab-entry-data entry) symtab addr)))
+            (t (error "Unknown symbol table entry type: %s" (u/gba/symtab-entry-type it))))))
+      mem)
+    (error
+      (error "Error while building ROM!\n%s" (cadr res)))
+    (:success
+      (message "Successfully linked ROM!")
+      res)))
 
 (cl-defstruct (u/gba/header (:constructor u/gba/make-header))
   entry ;; instruction branching to entrypoint

@@ -279,6 +279,8 @@ HALFWORD, and OFFSET2."
 
 (defun u/gba/arm-assemble-ins-branch (cond link offset)
   "Given COND, LINK, and OFFSET, produce 4 bytes."
+  (when (> offset #xffffff)
+    (error "Offset %s in branch is too large" offset))
   (u/split32le
     (logior
       (lsh (u/gba/arm-assemble-cond cond) 28)
@@ -288,6 +290,8 @@ HALFWORD, and OFFSET2."
 
 (defun u/gba/arm-assemble-ins-interrupt (cond data)
   "Given COND and DATA, produce 4 bytes."
+  (when (> data #xffffff)
+    (error "Data %s in interrupt is too large" data))
   (u/split32le
     (logior
       (lsh (u/gba/arm-assemble-cond cond) 28)
@@ -336,95 +340,98 @@ If CHECK is non-nil, check against system assembler.
 INS is either:
  - an opcode symbol
  - a list of an opcode symbol followed by operands"
-  (let*
-    ( (op (if (listp ins) (car ins) ins))
-      (opbase (if (listp ins) ins nil))
-      (set-cond (-contains? opbase 's))
-      (cond (or (car (--filter (-contains? u/gba/arm-conds it) opbase)) 'al))
-      (args (--filter (not (-contains? (cons cond u/gba/arm-flags) it)) (cdr opbase)))
-      (d (car args))
-      (dimm (u/gba/arm-assemble-imm d))
-      (a0 (cadr args))
-      (a1 (caddr args))
-      (a2 (cadddr args))
-      (res
-        (cl-case op
-          (adc (u/gba/arm-assemble-ins-dataprocessing cond 'adc set-cond a0 d a1 a2))
-          (add (u/gba/arm-assemble-ins-dataprocessing cond 'add set-cond a0 d a1 a2))
-          (and (u/gba/arm-assemble-ins-dataprocessing cond 'and set-cond a0 d a1 a2))
-          (b (u/gba/arm-assemble-ins-branch cond nil dimm))
-          (bic (u/gba/arm-assemble-ins-dataprocessing cond 'bic set-cond a0 d a1 a2))
-          (bl (u/gba/arm-assemble-ins-branch cond t dimm))
-          (brk (u/split32le (logior (lsh (u/gba/arm-assemble-cond cond) 28) (lsh #b011 25) (lsh #b1 4))))
-          (bx (u/gba/arm-assemble-ins-branchexchange cond d))
-          (cdp (error "Unsupported instruction: %s" ins))
-          (cmn (u/gba/arm-assemble-ins-dataprocessing cond 'cmn set-cond a0 d a1 a2))
-          (cmp (u/gba/arm-assemble-ins-dataprocessing cond 'cmp set-cond a0 d a1 a2))
-          (eor (u/gba/arm-assemble-ins-dataprocessing cond 'eor set-cond a0 d a1 a2))
-          (ldc (error "Unsupported instruction: %s" ins))
-          (ldm (u/gba/arm-assemble-ins-bdt cond (not (-contains? opbase 'post)) (not (-contains? opbase 'down)) (-contains? opbase 'psr) (-contains? opbase 'wb) t d a0))
-          (ldr
-            (u/gba/arm-assemble-ins-sdt
-              cond
-              (u/gba/arm-reg? a1) (not (-contains? opbase 'post)) (not (-contains? opbase 'down)) (-contains? opbase 'byte) (-contains? opbase 'wb) t
-              d a0 a1 a2))
-          (ldrh
-            (if-let* ((roff (and (u/gba/arm-reg? a1) (u/gba/arm-assemble-reg a1))))
-              (u/gba/arm-assemble-ins-hdtregister
+  (condition-case err
+    (let*
+      ( (op (if (listp ins) (car ins) ins))
+        (opbase (if (listp ins) ins nil))
+        (set-cond (-contains? opbase 's))
+        (cond (or (car (--filter (-contains? u/gba/arm-conds it) opbase)) 'al))
+        (args (--filter (not (-contains? (cons cond u/gba/arm-flags) it)) (cdr opbase)))
+        (d (car args))
+        (dimm (u/gba/arm-assemble-imm d))
+        (a0 (cadr args))
+        (a1 (caddr args))
+        (a2 (cadddr args))
+        (res
+          (cl-case op
+            (adc (u/gba/arm-assemble-ins-dataprocessing cond 'adc set-cond a0 d a1 a2))
+            (add (u/gba/arm-assemble-ins-dataprocessing cond 'add set-cond a0 d a1 a2))
+            (and (u/gba/arm-assemble-ins-dataprocessing cond 'and set-cond a0 d a1 a2))
+            (b (u/gba/arm-assemble-ins-branch cond nil dimm))
+            (bic (u/gba/arm-assemble-ins-dataprocessing cond 'bic set-cond a0 d a1 a2))
+            (bl (u/gba/arm-assemble-ins-branch cond t dimm))
+            (brk (u/split32le (logior (lsh (u/gba/arm-assemble-cond cond) 28) (lsh #b011 25) (lsh #b1 4))))
+            (bx (u/gba/arm-assemble-ins-branchexchange cond d))
+            (cdp (error "Unsupported instruction: %s" ins))
+            (cmn (u/gba/arm-assemble-ins-dataprocessing cond 'cmn set-cond a0 d a1 a2))
+            (cmp (u/gba/arm-assemble-ins-dataprocessing cond 'cmp set-cond a0 d a1 a2))
+            (eor (u/gba/arm-assemble-ins-dataprocessing cond 'eor set-cond a0 d a1 a2))
+            (ldc (error "Unsupported instruction: %s" ins))
+            (ldm (u/gba/arm-assemble-ins-bdt cond (not (-contains? opbase 'post)) (not (-contains? opbase 'down)) (-contains? opbase 'psr) (-contains? opbase 'wb) t d a0))
+            (ldr
+              (u/gba/arm-assemble-ins-sdt
                 cond
-                (not (-contains? opbase 'post)) (not (-contains? opbase 'down)) (-contains? opbase 'wb) t
-                a0 d (-contains? opbase 'signed) (not (-contains? opbase 'byte))
-                a1)
-              (u/gba/arm-assemble-ins-hdtimmediate
+                (u/gba/arm-reg? a1) (not (-contains? opbase 'post)) (not (-contains? opbase 'down)) (-contains? opbase 'byte) (-contains? opbase 'wb) t
+                d a0 a1 a2))
+            (ldrh
+              (if-let* ((roff (and (u/gba/arm-reg? a1) (u/gba/arm-assemble-reg a1))))
+                (u/gba/arm-assemble-ins-hdtregister
+                  cond
+                  (not (-contains? opbase 'post)) (not (-contains? opbase 'down)) (-contains? opbase 'wb) t
+                  a0 d (-contains? opbase 'signed) (not (-contains? opbase 'byte))
+                  a1)
+                (u/gba/arm-assemble-ins-hdtimmediate
+                  cond
+                  (not (-contains? opbase 'post)) (not (-contains? opbase 'down)) (-contains? opbase 'wb) t
+                  a0 d
+                  (logand #xf (lsh (or a1 0) -4))
+                  (-contains? opbase 'signed) (not (-contains? opbase 'byte))
+                  (logand #xf (or a1 0)))))
+            (mcr (error "Unsupported instruction: %s" ins))
+            (mla (u/gba/arm-assemble-ins-multiply cond t set-cond d a2 a1 a0))
+            (mov (u/gba/arm-assemble-ins-dataprocessing cond 'mov set-cond 'r0 d a0 a1))
+            (mrc (error "Unsupported instruction: %s" ins))
+            (mrs (error "Unsupported instruction: %s" ins))
+            (msr (error "Unsupported instruction: %s" ins))
+            (mul (u/gba/arm-assemble-ins-multiply cond nil set-cond d nil a1 a0))
+            (mvn (u/gba/arm-assemble-ins-dataprocessing cond 'mvn set-cond 'r0 d a0 a1))
+            (orr (u/gba/arm-assemble-ins-dataprocessing cond 'orr set-cond a0 d a1 a2))
+            (rsb (u/gba/arm-assemble-ins-dataprocessing cond 'rsb set-cond a0 d a1 a2))
+            (rsc (u/gba/arm-assemble-ins-dataprocessing cond 'rsc set-cond a0 d a1 a2))
+            (sbc (u/gba/arm-assemble-ins-dataprocessing cond 'sbc set-cond a0 d a1 a2))
+            (stc (error "Unsupported instruction: %s" ins))
+            (stm (u/gba/arm-assemble-ins-bdt cond (not (-contains? opbase 'post)) (not (-contains? opbase 'down)) (-contains? opbase 'psr) (-contains? opbase 'wb) nil d a0))
+            (str
+              (u/gba/arm-assemble-ins-sdt
                 cond
-                (not (-contains? opbase 'post)) (not (-contains? opbase 'down)) (-contains? opbase 'wb) t
-                a0 d
-                (logand #xf (lsh (or a1 0) -4))
-                (-contains? opbase 'signed) (not (-contains? opbase 'byte))
-                (logand #xf (or a1 0)))))
-          (mcr (error "Unsupported instruction: %s" ins))
-          (mla (u/gba/arm-assemble-ins-multiply cond t set-cond d a2 a1 a0))
-          (mov (u/gba/arm-assemble-ins-dataprocessing cond 'mov set-cond 'r0 d a0 a1))
-          (mrc (error "Unsupported instruction: %s" ins))
-          (mrs (error "Unsupported instruction: %s" ins))
-          (msr (error "Unsupported instruction: %s" ins))
-          (mul (u/gba/arm-assemble-ins-multiply cond nil set-cond d nil a1 a0))
-          (mvn (u/gba/arm-assemble-ins-dataprocessing cond 'mvn set-cond 'r0 d a0 a1))
-          (orr (u/gba/arm-assemble-ins-dataprocessing cond 'orr set-cond a0 d a1 a2))
-          (rsb (u/gba/arm-assemble-ins-dataprocessing cond 'rsb set-cond a0 d a1 a2))
-          (rsc (u/gba/arm-assemble-ins-dataprocessing cond 'rsc set-cond a0 d a1 a2))
-          (sbc (u/gba/arm-assemble-ins-dataprocessing cond 'sbc set-cond a0 d a1 a2))
-          (stc (error "Unsupported instruction: %s" ins))
-          (stm (u/gba/arm-assemble-ins-bdt cond (not (-contains? opbase 'post)) (not (-contains? opbase 'down)) (-contains? opbase 'psr) (-contains? opbase 'wb) nil d a0))
-          (str
-            (u/gba/arm-assemble-ins-sdt
-              cond
-              (u/gba/arm-reg? a1) (not (-contains? opbase 'post)) (not (-contains? opbase 'down)) (-contains? opbase 'byte) (-contains? opbase 'wb) nil
-              d a0 a1 a2))
-          (strh
-            (if-let* ((roff (and (u/gba/arm-reg? a1) (u/gba/arm-assemble-reg a1))))
-              (u/gba/arm-assemble-ins-hdtregister
-                cond
-                (not (-contains? opbase 'post)) (not (-contains? opbase 'down)) (-contains? opbase 'wb) nil
-                a0 d (-contains? opbase 'signed) (not (-contains? opbase 'byte))
-                a1)
-              (u/gba/arm-assemble-ins-hdtimmediate
-                cond
-                (not (-contains? opbase 'post)) (not (-contains? opbase 'down)) (-contains? opbase 'wb) nil
-                a0 d
-                (logand #xf (lsh (or a1 0) -4))
-                (-contains? opbase 'signed) (not (-contains? opbase 'byte))
-                (logand #xf (or a1 0)))))
-          (sub (u/gba/arm-assemble-ins-dataprocessing cond 'sub set-cond a0 d a1 a2))
-          (swi (u/gba/arm-assemble-ins-interrupt cond d))
-          (swp (u/gba/arm-assemble-ins-singledataswap cond (-contains? opbase 'swap) a0 a1 a2))
-          (teq (u/gba/arm-assemble-ins-dataprocessing cond 'teq set-cond a0 d a1 a2))
-          (tst (u/gba/arm-assemble-ins-dataprocessing cond 'tst set-cond a0 d a1 a2))
-          (t (error "Unknown opcode: %s" ins)))))
-    (when check
-      (unless (equal res (u/gba/arm-assemble-ins-string-system (u/gba/arm-render-ins ins)))
-        (error "Instruction %s did not match system assembly" ins)))
-    res))
+                (u/gba/arm-reg? a1) (not (-contains? opbase 'post)) (not (-contains? opbase 'down)) (-contains? opbase 'byte) (-contains? opbase 'wb) nil
+                d a0 a1 a2))
+            (strh
+              (if-let* ((roff (and (u/gba/arm-reg? a1) (u/gba/arm-assemble-reg a1))))
+                (u/gba/arm-assemble-ins-hdtregister
+                  cond
+                  (not (-contains? opbase 'post)) (not (-contains? opbase 'down)) (-contains? opbase 'wb) nil
+                  a0 d (-contains? opbase 'signed) (not (-contains? opbase 'byte))
+                  a1)
+                (u/gba/arm-assemble-ins-hdtimmediate
+                  cond
+                  (not (-contains? opbase 'post)) (not (-contains? opbase 'down)) (-contains? opbase 'wb) nil
+                  a0 d
+                  (logand #xf (lsh (or a1 0) -4))
+                  (-contains? opbase 'signed) (not (-contains? opbase 'byte))
+                  (logand #xf (or a1 0)))))
+            (sub (u/gba/arm-assemble-ins-dataprocessing cond 'sub set-cond a0 d a1 a2))
+            (swi (u/gba/arm-assemble-ins-interrupt cond d))
+            (swp (u/gba/arm-assemble-ins-singledataswap cond (-contains? opbase 'swap) a0 a1 a2))
+            (teq (u/gba/arm-assemble-ins-dataprocessing cond 'teq set-cond a0 d a1 a2))
+            (tst (u/gba/arm-assemble-ins-dataprocessing cond 'tst set-cond a0 d a1 a2))
+            (t (error "Unknown opcode: %s" ins)))))
+      (when check
+        (unless (equal res (u/gba/arm-assemble-ins-string-system (u/gba/arm-render-ins ins)))
+          (error "Instruction %s did not match system assembly" ins)))
+      res)
+    (error
+      (error "While assembling instruction %s\n%s" ins (cadr err)))))
 
 (defun u/gba/arm-assemble (prog)
   "Assemble the list of instructions PROG."

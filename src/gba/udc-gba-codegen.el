@@ -28,12 +28,31 @@
 (defun u/gba/codegen ()
   "Retrieve the current code generation context."
   (or u/gba/codegen (error "Code generation context is not bound")))
-(defun u/gba/codegen-replace-pseudo-multi (ins idx)
-  "Replace INS if it is a pseudo-instruction at IDX."
+(defun u/gba/codegen-remove-local-labels (ins idx)
+  "Record and remove INS at IDX if it is a local label."
   (cond
     ((keywordp ins) ;; label
       (ht-set (u/gba/codegen-local-labels (u/gba/codegen)) ins idx)
       nil)
+    (t (list ins))))
+(defun u/gba/codegen-replace-local-labels (ins idx)
+  "Replace local labels from the current codegen context in INS at IDX.
+HLEN is the length of the prepended header (in instructions)."
+  (--map
+    (if (and (keywordp it) (ht-contains? (u/gba/codegen-local-labels (u/gba/codegen)) it))
+      (let* ( (insoff (+ 1 idx))
+              (laboff (ht-get (u/gba/codegen-local-labels (u/gba/codegen)) it))
+              (ty (u/gba/codegen-type (u/gba/codegen))))
+        (message "%s" `(laboff ,it ,laboff ,laboff ,insoff ,(+ (- laboff insoff) 2)))
+        (cl-case ty
+          (arm (- laboff insoff 1))
+          (thumb (- laboff insoff 1))
+          (t (error "Unknown assembly type: %s" ty))))
+      it)
+    ins))
+(defun u/gba/codegen-replace-pseudo-multi (ins)
+  "Replace INS if it is a pseudo-instruction at IDX."
+  (cond
     ((listp ins) ;; instruction
       (let ( (op (car ins))
              (ty (u/gba/codegen-type (u/gba/codegen))))
@@ -93,46 +112,34 @@ LEN is the total number of instructions being generated."
              (ty (u/gba/codegen-type (u/gba/codegen))))
         (cl-case op
           (:const ;; constant in the literal pool
-            (let* ( (rd (cadr ins))
-                    (lit (caddr ins))
-                    (loc
-                      (if-let* ((cur (ht-get (u/gba/literals-offsets (u/gba/codegen-literals (u/gba/codegen))) lit)))
-                        cur
-                        (let ((cur (u/gba/literals-pool (u/gba/codegen-literals (u/gba/codegen)))))
-                          (setf (u/gba/literals-bytes (u/gba/codegen-literals (u/gba/codegen)))
-                            (append
-                              (reverse (u/split32le lit))
-                              (u/gba/literals-bytes (u/gba/codegen-literals (u/gba/codegen)))))
-                          (ht-set (u/gba/literals-offsets (u/gba/codegen-literals (u/gba/codegen))) lit cur)
-                          (cl-incf (u/gba/literals-pool (u/gba/codegen-literals (u/gba/codegen))) 4)
-                          cur)))
-                    (inslen (cl-case ty (arm 4) (thumb 2) (t (error "Unknown assembly type: %s" ty))))
-                    (pcoff (cl-case ty (arm 1) (thumb 2) (t (error "Unknown assembly type: %s" ty))))
-                    (insoff (logand #b11111111111111111111111111111100 (* inslen idx)))
-                    (litoff (+ (* inslen (+ pcoff len)) loc)))
-              (message "%s" `(literal ,ins ,idx ,inslen ,insoff ,litoff ,loc))
-              (cl-case ty
-                (arm `(ldr ,rd ,u/gba/pc ,(- litoff insoff 12)))
-                (thumb `(ldrpc ,rd ,(/ (- litoff insoff 8) 4)))
-                (t (error "Unknown assembly type: %s" ty)))))
+            (let ((rd (cadr ins)) (lit (caddr ins)))
+              (cond
+                ((and (eq ty 'arm) (<= lit #xff))
+                  `(mov ,rd ,lit))
+                ((and (eq ty 'thumb) (<= lit #xff))
+                  `(movi ,rd ,lit))
+                (t
+                  (let* ( (loc
+                            (if-let* ((cur (ht-get (u/gba/literals-offsets (u/gba/codegen-literals (u/gba/codegen))) lit)))
+                              cur
+                              (let ((cur (u/gba/literals-pool (u/gba/codegen-literals (u/gba/codegen)))))
+                                (setf (u/gba/literals-bytes (u/gba/codegen-literals (u/gba/codegen)))
+                                  (append
+                                    (reverse (u/split32le lit))
+                                    (u/gba/literals-bytes (u/gba/codegen-literals (u/gba/codegen)))))
+                                (ht-set (u/gba/literals-offsets (u/gba/codegen-literals (u/gba/codegen))) lit cur)
+                                (cl-incf (u/gba/literals-pool (u/gba/codegen-literals (u/gba/codegen))) 4)
+                                cur)))
+                          (inslen (cl-case ty (arm 4) (thumb 2) (t (error "Unknown assembly type: %s" ty))))
+                          (pcoff (cl-case ty (arm 1) (thumb 2) (t (error "Unknown assembly type: %s" ty))))
+                          (insoff (logand #b11111111111111111111111111111100 (* inslen idx)))
+                          (litoff (+ (* inslen (+ pcoff len)) loc)))
+                    (cl-case ty
+                      (arm `(ldr ,rd ,u/gba/pc ,(- litoff insoff 12)))
+                      (thumb `(ldrpc ,rd ,(/ (- litoff insoff 5) 4)))
+                      (t (error "Unknown assembly type: %s" ty))))))))
           (t ins))))
     (t (error "Unknown single pseudo-instruction: %s" ins))))
-(defun u/gba/codegen-replace-local-labels (hlen ins idx)
-  "Replace local labels from the current codegen context in INS at IDX.
-HLEN is the length of the prepended header (in instructions)."
-  (--map
-    (if (and (keywordp it) (ht-contains? (u/gba/codegen-local-labels (u/gba/codegen)) it))
-      (let* ( (insoff (+ 1 idx))
-              (blaboff (ht-get (u/gba/codegen-local-labels (u/gba/codegen)) it))
-              (laboff (+ hlen blaboff))
-              (ty (u/gba/codegen-type (u/gba/codegen))))
-        (message "%s" `(blaboff ,it ,blaboff ,laboff ,insoff ,(+ (- laboff insoff) 2)))
-        (cl-case ty
-          (arm (- laboff insoff 1))
-          (thumb (- laboff insoff 1))
-          (t (error "Unknown assembly type: %s" ty))))
-      it)
-    ins))
 (defun u/gba/codegen-function (ty ps)
   "Allocate enough space for all literals used in the pseudo-instructions PS.
 Return a pair of the code for the header and the code for the footer for TY."
@@ -181,8 +188,12 @@ Return a pair of the code for the header and the code for the footer for TY."
   "Extract the generated code from the current codegen context."
   (let* ( (g (u/gba/codegen))
           (ps (u/gba/codegen-instructions g))
-          (reved (reverse ps)))
-    reved))
+          (reved (reverse ps))
+          (code
+            (--map-indexed
+              (u/gba/codegen-replace-local-labels it it-index)
+              (u/gba/codegen-collect #'u/gba/codegen-remove-local-labels reved))))
+    code))
 (defun u/gba/codegen-extract-with-literals (symtab section sym &optional func)
   "Extract the generated code and literals from the current codegen context.
 Place the resulting code in SYMTAB at SYM in SECTION.
@@ -193,15 +204,11 @@ Add stack bookkeeping if SP is non-nil."
            ((header . footer) (u/gba/codegen-function ty ps))
            (ecode (u/gba/codegen-extract))
            (icode (if func (-concat header ecode footer) ecode))
-           (postmulti (u/gba/codegen-collect #'u/gba/codegen-replace-pseudo-multi icode))
-           (postsingle 
+           (postmulti (-mapcat #'u/gba/codegen-replace-pseudo-multi icode))
+           (code
              (--map-indexed
                (u/gba/codegen-replace-pseudo-single (length postmulti) it it-index)
-               postmulti))
-           (code 
-             (--map-indexed
-               (u/gba/codegen-replace-local-labels (length header) it it-index)
-               postsingle)))
+               postmulti)))
     (u/gba/symtab-add! symtab section sym (u/gba/codegen-type (u/gba/codegen)) code)
     (when-let* ((bytes (reverse (u/gba/literals-bytes (u/gba/codegen-literals (u/gba/codegen))))))
       (u/gba/symtab-add! symtab section (intern (format "%s-literals" sym)) 'bytes bytes))))

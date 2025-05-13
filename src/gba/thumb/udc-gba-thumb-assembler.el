@@ -63,6 +63,8 @@
     (t (error "Invalid shift operator: %s" op))))
 (defun u/gba/thumb-assemble-ins-moveshiftedregister (op offset src dest)
   "Given OP, OFFSET, SRC, and DEST produce 2 bytes."
+  (when (> offset #b11111)
+    (error "Offset %s in move shifted register is too large" offset))
   (u/split16le
     (logior
       (lsh #b000 13)
@@ -95,6 +97,8 @@
     (t (error "Invalid move/compare/add/subtract immediate operator: %s" op))))
 (defun u/gba/thumb-assemble-ins-mcas-immediate (op dest offset)
   "Given OP, DEST, and OFFSET produce 2 bytes."
+  (when (> offset #xff)
+    (error "Offset %s in MCAS is too large" offset))
   (u/split16le
     (logior
       (lsh #b001 13)
@@ -146,6 +150,8 @@
 
 (defun u/gba/thumb-assemble-ins-pcrelativeload (dest offset)
   "Given DEST and OFFSET produce 2 bytes."
+  (when (> offset #xff)
+    (error "Offset %s in PC-relative load is too large" offset))
   (u/split16le
     (logior
       (lsh #b01001 11)
@@ -178,6 +184,8 @@
 
 (defun u/gba/thumb-assemble-ins-loadstoreimmediate (load byte offset base dest)
   "Given LOAD, BYTE, OFFSET, BASE, and DEST produce 2 bytes."
+  (when (> offset #b11111)
+    (error "Offset %s in load/store is too large" offset))
   (u/split16le
     (logior
       (lsh #b011 13)
@@ -189,6 +197,8 @@
 
 (defun u/gba/thumb-assemble-ins-loadstorehalfword (load offset base dest)
   "Given LOAD, OFFSET, BASE, and DEST produce 2 bytes."
+  (when (> offset #b11111)
+    (error "Offset %s in load/store halfword is too large" offset))
   (u/split16le
     (logior
       (lsh #b1000 12)
@@ -199,6 +209,8 @@
 
 (defun u/gba/thumb-assemble-ins-sprelativeloadstore (load dest offset)
   "Given LOAD, DEST, and OFFSET produce 2 bytes."
+  (when (> offset #xff)
+    (error "Offset %s in SP-relative load/store is too large" offset))
   (u/split16le
     (logior
       (lsh #b1001 12)
@@ -208,6 +220,8 @@
 
 (defun u/gba/thumb-assemble-ins-loadaddress (sp dest offset)
   "Given SP, DEST, and OFFSET produce 2 bytes."
+  (when (> offset #xff)
+    (error "Offset %s in load address is too large" offset))
   (u/split16le
     (logior
       (lsh #b1010 12)
@@ -217,6 +231,8 @@
 
 (defun u/gba/thumb-assemble-ins-addoffsetstackpointer (sign offset)
   "Given SIGN and OFFSET produce 2 bytes."
+  (when (> offset #b1111111)
+    (error "Offset %s in add to stack pointer is too large" offset))
   (u/split16le
     (logior
       (lsh #b10110000 8)
@@ -254,6 +270,8 @@
 
 (defun u/gba/thumb-assemble-ins-conditionalbranch (cond offset)
   "Given COND and OFFSET produce 2 bytes."
+  (when (> offset #xff)
+    (error "Offset %s in conditional branch is too large" offset))
   (u/split16le
     (logior
       (lsh #b1101 12)
@@ -262,6 +280,8 @@
 
 (defun u/gba/thumb-assemble-ins-swi (comment)
   "Given COMMENT produce 2 bytes."
+  (when (> comment #xff)
+    (error "Comment %s in software interrupt is too large" comment))
   (u/split16le
     (logior
       (lsh #b11011111 8)
@@ -269,6 +289,8 @@
 
 (defun u/gba/thumb-assemble-ins-unconditionalbranch (offset)
   "Given OFFSET produce 2 bytes."
+  (when (> offset #b11111111111)
+    (error "Offset %s in unconditional branch is too large" offset))
   (u/split16le
     (logior
       (lsh #b11100 11)
@@ -276,10 +298,11 @@
 
 (defun u/gba/thumb-assemble-ins-branchlink (h offset)
   "Given H and OFFSET produce 2 bytes."
+  (when (> offset #b11111111111111111111111)
+    (error "Offset %s in branch with link is too large" offset))
   (let* ((offbytes (* (if h (+ offset 1) offset) 2))
          (lo (logand (ash offbytes -1) #b11111111111))
          (hi (logand (ash offbytes -12) #b11111111111)))
-    (print `(branchlink ,h ,offset ,lo ,hi))
     (u/split16le
      (logior
       (lsh #b1111 12)
@@ -317,92 +340,95 @@ If CHECK is non-nil, check against system assembler.
 INS is either:
  - an opcode symbol
  - a list of an opcode symbol followed by operands"
-  (let*
-    ( (op (if (listp ins) (car ins) ins))
-      (opbase (if (listp ins) ins nil))
-      (args (cdr opbase))
-      (o0 (car args))
-      (o1 (cadr args))
-      (o2 (caddr args))
-      (res
-        (cl-case op
-          (adc (u/gba/thumb-assemble-ins-alu 'adc o1 o0))
-          (add (u/gba/thumb-assemble-ins-addsubtract 'add o2 o1 o0))
-          (addhi (u/gba/thumb-assemble-ins-hi 'add o1 o0))
-          (addpc (u/gba/thumb-assemble-ins-loadaddress nil o0 o1))
-          (addsp (u/gba/thumb-assemble-ins-loadaddress t o0 o1))
-          (and (u/gba/thumb-assemble-ins-alu 'and o1 o0))
-          (asr (u/gba/thumb-assemble-ins-alu 'asr o1 o0))
-          (asrx (u/gba/thumb-assemble-ins-moveshiftedregister 'asr o2 o1 o0))
-          (b (u/gba/thumb-assemble-ins-unconditionalbranch o0))
-          (beq (u/gba/thumb-assemble-ins-conditionalbranch 'eq o0))
-          (bne (u/gba/thumb-assemble-ins-conditionalbranch 'ne o0))
-          (bcs (u/gba/thumb-assemble-ins-conditionalbranch 'cs o0))
-          (bcc (u/gba/thumb-assemble-ins-conditionalbranch 'cc o0))
-          (bmi (u/gba/thumb-assemble-ins-conditionalbranch 'mi o0))
-          (bpl (u/gba/thumb-assemble-ins-conditionalbranch 'pl o0))
-          (bvs (u/gba/thumb-assemble-ins-conditionalbranch 'vs o0))
-          (bhi (u/gba/thumb-assemble-ins-conditionalbranch 'hi o0))
-          (bls (u/gba/thumb-assemble-ins-conditionalbranch 'ls o0))
-          (bge (u/gba/thumb-assemble-ins-conditionalbranch 'ge o0))
-          (blt (u/gba/thumb-assemble-ins-conditionalbranch 'lt o0))
-          (bgt (u/gba/thumb-assemble-ins-conditionalbranch 'gt o0))
-          (ble (u/gba/thumb-assemble-ins-conditionalbranch 'le o0))
-          (bic (u/gba/thumb-assemble-ins-alu 'bic o1 o0))
-          (bl0 (u/gba/thumb-assemble-ins-branchlink nil o0))
-          (bl1 (u/gba/thumb-assemble-ins-branchlink t o0))
-          (bx (u/gba/thumb-assemble-ins-hi 'bx o0 nil))
-          (cmn (u/gba/thumb-assemble-ins-alu 'cmn o1 o0))
-          (cmp (u/gba/thumb-assemble-ins-alu 'cmp o1 o0))
-          (cmpi (u/gba/thumb-assemble-ins-mcas-immediate 'cmp o0 o1))
-          (cmphi (u/gba/thumb-assemble-ins-hi 'cmp o1 o0))
-          (dec (u/gba/thumb-assemble-ins-mcas-immediate 'dec o0 o1))
-          (decsp (u/gba/thumb-assemble-ins-addoffsetstackpointer t o0))
-          (eor (u/gba/thumb-assemble-ins-alu 'eor o1 o0))
-          (inc (u/gba/thumb-assemble-ins-mcas-immediate 'inc o0 o1))
-          (incsp (u/gba/thumb-assemble-ins-addoffsetstackpointer nil o0))
-          (ldmia (u/gba/thumb-assemble-ins-multipleloadstore t o0 o1))
-          (ldr (u/gba/thumb-assemble-ins-loadstore t nil o2 o1 o0))
-          (ldri (u/gba/thumb-assemble-ins-loadstoreimmediate t nil o2 o1 o0))
-          (ldrb (u/gba/thumb-assemble-ins-loadstore t t o2 o1 o0))
-          (ldrbi (u/gba/thumb-assemble-ins-loadstoreimmediate t t o2 o1 o0))
-          (ldrpc (u/gba/thumb-assemble-ins-pcrelativeload o0 o1))
-          (ldrsp (u/gba/thumb-assemble-ins-sprelativeloadstore t o0 o1))
-          (ldrh (u/gba/thumb-assemble-ins-loadstoresext nil t o2 o1 o0))
-          (ldrhi (u/gba/thumb-assemble-ins-loadstorehalfword t o2 o1 o0))
-          (lsl (u/gba/thumb-assemble-ins-alu 'lsl o1 o0))
-          (lslx (u/gba/thumb-assemble-ins-moveshiftedregister 'lsl o2 o1 o0))
-          (ldsb (u/gba/thumb-assemble-ins-loadstoresext t nil o2 o1 o0))
-          (ldsh (u/gba/thumb-assemble-ins-loadstoresext t t o2 o1 o0))
-          (lsr (u/gba/thumb-assemble-ins-alu 'lsr o1 o0))
-          (lsrx (u/gba/thumb-assemble-ins-moveshiftedregister 'lsr o2 o1 o0))
-          (mov (u/gba/thumb-assemble-ins-addsubtract 'add 0 o1 o0))
-          (movi (u/gba/thumb-assemble-ins-mcas-immediate 'mov o0 o1))
-          (movhi (u/gba/thumb-assemble-ins-hi 'mov o1 o0))
-          (mul (u/gba/thumb-assemble-ins-alu 'mul o1 o0))
-          (mvn (u/gba/thumb-assemble-ins-alu 'mvn o1 o0))
-          (neg (u/gba/thumb-assemble-ins-alu 'neg o1 o0))
-          (orr (u/gba/thumb-assemble-ins-alu 'orr o1 o0))
-          (pop (u/gba/thumb-assemble-ins-pushpop t o0))
-          (push (u/gba/thumb-assemble-ins-pushpop nil o0))
-          (ror (u/gba/thumb-assemble-ins-alu 'ror o1 o0))
-          (sbc (u/gba/thumb-assemble-ins-alu 'sbc o1 o0))
-          (stmia (u/gba/thumb-assemble-ins-multipleloadstore nil o0 o1))
-          (str (u/gba/thumb-assemble-ins-loadstore nil nil o2 o1 o0))
-          (stri (u/gba/thumb-assemble-ins-loadstoreimmediate nil nil o2 o1 o0))
-          (strb (u/gba/thumb-assemble-ins-loadstore nil t o2 o1 o0))
-          (strbi (u/gba/thumb-assemble-ins-loadstoreimmediate nil t o2 o1 o0))
-          (strsp (u/gba/thumb-assemble-ins-sprelativeloadstore nil o0 o1))
-          (strh (u/gba/thumb-assemble-ins-loadstoresext nil nil o2 o1 o0))
-          (strhi (u/gba/thumb-assemble-ins-loadstorehalfword nil o2 o1 o0))
-          (swi (u/gba/thumb-assemble-ins-swi o0))
-          (sub (u/gba/thumb-assemble-ins-addsubtract 'sub o2 o1 o0))
-          (tst (u/gba/thumb-assemble-ins-alu 'tst o1 o0))
-          (t (error "Unknown opcode: %s" ins)))))
-    (when check
-      (unless (equal res (u/gba/thumb-assemble-ins-string-system (u/gba/thumb-render-ins ins)))
-        (error "Instruction %s did not match system assembly" ins)))
-    res))
+  (condition-case err
+    (let*
+      ( (op (if (listp ins) (car ins) ins))
+        (opbase (if (listp ins) ins nil))
+        (args (cdr opbase))
+        (o0 (car args))
+        (o1 (cadr args))
+        (o2 (caddr args))
+        (res
+          (cl-case op
+            (adc (u/gba/thumb-assemble-ins-alu 'adc o1 o0))
+            (add (u/gba/thumb-assemble-ins-addsubtract 'add o2 o1 o0))
+            (addhi (u/gba/thumb-assemble-ins-hi 'add o1 o0))
+            (addpc (u/gba/thumb-assemble-ins-loadaddress nil o0 o1))
+            (addsp (u/gba/thumb-assemble-ins-loadaddress t o0 o1))
+            (and (u/gba/thumb-assemble-ins-alu 'and o1 o0))
+            (asr (u/gba/thumb-assemble-ins-alu 'asr o1 o0))
+            (asrx (u/gba/thumb-assemble-ins-moveshiftedregister 'asr o2 o1 o0))
+            (b (u/gba/thumb-assemble-ins-unconditionalbranch o0))
+            (beq (u/gba/thumb-assemble-ins-conditionalbranch 'eq o0))
+            (bne (u/gba/thumb-assemble-ins-conditionalbranch 'ne o0))
+            (bcs (u/gba/thumb-assemble-ins-conditionalbranch 'cs o0))
+            (bcc (u/gba/thumb-assemble-ins-conditionalbranch 'cc o0))
+            (bmi (u/gba/thumb-assemble-ins-conditionalbranch 'mi o0))
+            (bpl (u/gba/thumb-assemble-ins-conditionalbranch 'pl o0))
+            (bvs (u/gba/thumb-assemble-ins-conditionalbranch 'vs o0))
+            (bhi (u/gba/thumb-assemble-ins-conditionalbranch 'hi o0))
+            (bls (u/gba/thumb-assemble-ins-conditionalbranch 'ls o0))
+            (bge (u/gba/thumb-assemble-ins-conditionalbranch 'ge o0))
+            (blt (u/gba/thumb-assemble-ins-conditionalbranch 'lt o0))
+            (bgt (u/gba/thumb-assemble-ins-conditionalbranch 'gt o0))
+            (ble (u/gba/thumb-assemble-ins-conditionalbranch 'le o0))
+            (bic (u/gba/thumb-assemble-ins-alu 'bic o1 o0))
+            (bl0 (u/gba/thumb-assemble-ins-branchlink nil o0))
+            (bl1 (u/gba/thumb-assemble-ins-branchlink t o0))
+            (bx (u/gba/thumb-assemble-ins-hi 'bx o0 nil))
+            (cmn (u/gba/thumb-assemble-ins-alu 'cmn o1 o0))
+            (cmp (u/gba/thumb-assemble-ins-alu 'cmp o1 o0))
+            (cmpi (u/gba/thumb-assemble-ins-mcas-immediate 'cmp o0 o1))
+            (cmphi (u/gba/thumb-assemble-ins-hi 'cmp o1 o0))
+            (dec (u/gba/thumb-assemble-ins-mcas-immediate 'dec o0 o1))
+            (decsp (u/gba/thumb-assemble-ins-addoffsetstackpointer t o0))
+            (eor (u/gba/thumb-assemble-ins-alu 'eor o1 o0))
+            (inc (u/gba/thumb-assemble-ins-mcas-immediate 'inc o0 o1))
+            (incsp (u/gba/thumb-assemble-ins-addoffsetstackpointer nil o0))
+            (ldmia (u/gba/thumb-assemble-ins-multipleloadstore t o0 o1))
+            (ldr (u/gba/thumb-assemble-ins-loadstore t nil o2 o1 o0))
+            (ldri (u/gba/thumb-assemble-ins-loadstoreimmediate t nil o2 o1 o0))
+            (ldrb (u/gba/thumb-assemble-ins-loadstore t t o2 o1 o0))
+            (ldrbi (u/gba/thumb-assemble-ins-loadstoreimmediate t t o2 o1 o0))
+            (ldrpc (u/gba/thumb-assemble-ins-pcrelativeload o0 o1))
+            (ldrsp (u/gba/thumb-assemble-ins-sprelativeloadstore t o0 o1))
+            (ldrh (u/gba/thumb-assemble-ins-loadstoresext nil t o2 o1 o0))
+            (ldrhi (u/gba/thumb-assemble-ins-loadstorehalfword t o2 o1 o0))
+            (lsl (u/gba/thumb-assemble-ins-alu 'lsl o1 o0))
+            (lslx (u/gba/thumb-assemble-ins-moveshiftedregister 'lsl o2 o1 o0))
+            (ldsb (u/gba/thumb-assemble-ins-loadstoresext t nil o2 o1 o0))
+            (ldsh (u/gba/thumb-assemble-ins-loadstoresext t t o2 o1 o0))
+            (lsr (u/gba/thumb-assemble-ins-alu 'lsr o1 o0))
+            (lsrx (u/gba/thumb-assemble-ins-moveshiftedregister 'lsr o2 o1 o0))
+            (mov (u/gba/thumb-assemble-ins-addsubtract 'add 0 o1 o0))
+            (movi (u/gba/thumb-assemble-ins-mcas-immediate 'mov o0 o1))
+            (movhi (u/gba/thumb-assemble-ins-hi 'mov o1 o0))
+            (mul (u/gba/thumb-assemble-ins-alu 'mul o1 o0))
+            (mvn (u/gba/thumb-assemble-ins-alu 'mvn o1 o0))
+            (neg (u/gba/thumb-assemble-ins-alu 'neg o1 o0))
+            (orr (u/gba/thumb-assemble-ins-alu 'orr o1 o0))
+            (pop (u/gba/thumb-assemble-ins-pushpop t o0))
+            (push (u/gba/thumb-assemble-ins-pushpop nil o0))
+            (ror (u/gba/thumb-assemble-ins-alu 'ror o1 o0))
+            (sbc (u/gba/thumb-assemble-ins-alu 'sbc o1 o0))
+            (stmia (u/gba/thumb-assemble-ins-multipleloadstore nil o0 o1))
+            (str (u/gba/thumb-assemble-ins-loadstore nil nil o2 o1 o0))
+            (stri (u/gba/thumb-assemble-ins-loadstoreimmediate nil nil o2 o1 o0))
+            (strb (u/gba/thumb-assemble-ins-loadstore nil t o2 o1 o0))
+            (strbi (u/gba/thumb-assemble-ins-loadstoreimmediate nil t o2 o1 o0))
+            (strsp (u/gba/thumb-assemble-ins-sprelativeloadstore nil o0 o1))
+            (strh (u/gba/thumb-assemble-ins-loadstoresext nil nil o2 o1 o0))
+            (strhi (u/gba/thumb-assemble-ins-loadstorehalfword nil o2 o1 o0))
+            (swi (u/gba/thumb-assemble-ins-swi o0))
+            (sub (u/gba/thumb-assemble-ins-addsubtract 'sub o2 o1 o0))
+            (tst (u/gba/thumb-assemble-ins-alu 'tst o1 o0))
+            (t (error "Unknown opcode: %s" ins)))))
+      (when check
+        (unless (equal res (u/gba/thumb-assemble-ins-string-system (u/gba/thumb-render-ins ins)))
+          (error "Instruction %s did not match system assembly" ins)))
+      res)
+    (error
+      (error "While assembling instruction %s\n%s" ins (cadr err)))))
 
 (defun u/gba/thumb-assemble (prog)
   "Assemble the list of instructions PROG."

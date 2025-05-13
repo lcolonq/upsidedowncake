@@ -48,7 +48,7 @@ If the colors do not occur exactly in PAL, throw an error."
 
 (defun u/gba/image-load-png-palette (path)
   "Load an image and derive a palette automatically from PATH."
-  (let* ( (img (u/load-image-png path))
+  (let* ( (img (or (u/load-image-png path) (error "Failed to load image at: %s" path)))
           (colors (cons '(0 0 0) (-uniq (seq-into (caddr img) 'list))))
           (pal (u/gba/make-palette :colors colors)))
     (cons
