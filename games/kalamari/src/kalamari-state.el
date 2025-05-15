@@ -7,7 +7,8 @@
 (require 'kalamari-syms)
 
 ;;;; State
-(u/gba/symtab-add! k/syms :vars :var-test 'var (* 4 10))
+(u/gba/symtab-add! k/syms :vars :var-x 'var 4) ;; player global coordinates
+(u/gba/symtab-add! k/syms :vars :var-y 'var 4)
 ;; on rom:
 ;; world - array of chunks
 ;; chunk - 32x32 array of tiles

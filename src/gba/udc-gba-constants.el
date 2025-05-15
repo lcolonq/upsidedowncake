@@ -24,6 +24,19 @@
     (down . #b10000000)
     (r . #b100000000)
     (l . #b1000000000)))
+(defconst u/gba/dispcnt-video-modes '(:videomode0 :videomode1 :videomode2 :videomode3 :videomode4 :videomode5))
+(defconst u/gba/bgcnt-priorities '(:priority0 :priority1 :priority2 :priority3))
+(defconst u/gba/bgcnt-charblocks '(:charblock0 :charblock1 :charblock2 :charblock3))
+(defconst u/gba/bgcnt-screenblocks
+  '( :screenblock0 :screenblock1 :screenblock2 :screenblock3
+     :screenblock4 :screenblock5 :screenblock6 :screenblock7
+     :screenblock8 :screenblock9 :screenblock10 :screenblock11
+     :screenblock12 :screenblock13 :screenblock14 :screenblock15
+     :screenblock16 :screenblock17 :screenblock18 :screenblock19
+     :screenblock20 :screenblock21 :screenblock22 :screenblock23
+     :screenblock24 :screenblock25 :screenblock26 :screenblock27
+     :screenblock28 :screenblock29 :screenblock30 :screenblock31
+     ))
 
 (provide 'udc-gba-constants)
 ;;; udc-gba-constants.el ends here

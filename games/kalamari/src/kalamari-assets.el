@@ -17,10 +17,19 @@
 (u/gba/symtab-add! k/syms :data :data-palette-tiles 'bytes (u/gba/palette-bytes k/palette-tiles))
 (u/gba/symtab-add! k/syms :data :data-tiledata-tiles 'bytes k/tiledata-tiles)
 
+(defvar k/source-player (u/gba/image-load-png-palette (f-join k/base-path "assets/player.png")))
+(defconst k/image-player (car k/source-player))
+(defconst k/palette-player (cdr k/source-player))
+(defconst k/tiledata-player (--mapcat it (u/gba/image-tiledata k/image-player)))
+(u/gba/symtab-add! k/syms :data :data-palette-player 'bytes (u/gba/palette-bytes k/palette-player))
+(u/gba/symtab-add! k/syms :data :data-tiledata-player 'bytes k/tiledata-player)
+
 ;;;; Asset loading
 (u/gba/thumb-function k/syms :load-assets
   (u/gba/thumb-call k/syms :wordcpy :palette-bg :data-palette-tiles 128)
-  (u/gba/thumb-call k/syms :wordcpy :vram-bg-charblock0 :data-tiledata-tiles (/ (length k/tiledata-tiles) 4)))
+  (u/gba/thumb-call k/syms :wordcpy :vram-bg-charblock0 :data-tiledata-tiles (/ (length k/tiledata-tiles) 4))
+  (u/gba/thumb-call k/syms :wordcpy :palette-sprite :data-palette-player 128)
+  (u/gba/thumb-call k/syms :wordcpy :vram-sprite-charblock0 :data-tiledata-player (/ (length k/tiledata-player) 4)))
 
 (provide 'kalamari-assets)
 ;;; kalamari-assets.el ends here
