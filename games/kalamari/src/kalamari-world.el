@@ -6,8 +6,8 @@
 (require 'kalamari-syms)
 
 (defconst k/chunk-size 16)
-(defconst k/world-width 3)
-(defconst k/world-height 3)
+(defconst k/world-width 4)
+(defconst k/world-height 2)
 
 (defconst k/chunk-idx 0)
 (defun k/add-chunk (chunk)
@@ -50,30 +50,26 @@ This function loads a 16x16 chunk to DESTX,DESTY in VRAM."
     ;; Each byte represents a tile index
     (u/gba/claim! 'r1 'r2 'r3)
     (let ( (dx (mod destx 32)) (dy (mod desty 32))
-           (addr (u/gba/thumb-loc k/syms :vram-bg-screenblock28))
-           (quad
-             (u/gba/thumb-fresh-constant
-               (* 1024
-                 (+ (if (>= destx 32) 1 0) (if (>= desty 32) 2 0) )))))
-      (u/gba/thumb-for 0 (* k/chunk-size k/chunk-size)
-        (lambda (idx)
-          (let ( (tmp (u/gba/thumb-fresh-constant 0))
-                 (x (u/gba/fresh!))
-                 (y (u/gba/fresh!)))
-            (u/gba/thumb-constant y (- k/chunk-size 1))
-            (u/gba/emit!
-              `(mov ,x ,idx) ;; extract x and y from idx
-              `(and ,x ,y) `(lsrx ,y ,idx ,(truncate (log k/chunk-size 2)))
-              `(inc ,x ,dx) `(inc ,y ,dy))
-            (u/gba/emit!
-              `(lslx ,y ,y 5) ;; assemble the index in the tilemap
-              `(orr ,y ,x)
-              `(add ,y ,y ,quad)
-              `(lslx ,y ,y 1)) ;; convert that index to a byte offset
-            (u/gba/claim! x)
-            (u/gba/thumb-get8 k/syms tmp `(r0 . ,idx))
-            (u/gba/thumb-set16 k/syms `(,addr . ,y) tmp)
-            ))))))
+           (idx 'r0)
+           (tmp (u/gba/thumb-fresh-constant 0))
+           (offset (u/gba/fresh!))
+           (quad (* 1024 (+ (if (>= destx 32) 1 0) (if (>= desty 32) 2 0) ))))
+      (u/gba/thumb-for dy (+ k/chunk-size dy)
+        (lambda (y)
+          (message "regs y: %s" (u/gba/codegen-regs-available u/gba/codegen))
+          (u/gba/thumb-for dx (+ k/chunk-size dx)
+            (lambda (x)
+              (message "regs x: %s" (u/gba/codegen-regs-available u/gba/codegen))
+              (u/gba/thumb-constant tmp quad)
+              (u/gba/emit!
+                `(lslx ,offset ,y 5) ;; assemble the index in the tilemap
+                `(orr ,offset ,x)
+                `(add ,offset ,offset ,tmp)
+                `(lslx ,offset ,offset 1)) ;; convert that index to a byte offset
+              (u/gba/thumb-get8 k/syms tmp idx)
+              (u/gba/emit!
+                `(inc ,idx 1))
+              (u/gba/thumb-set16 k/syms `(:vram-bg-screenblock28 . ,offset) tmp))))))))
 
 (-each (-iota 4)
   (lambda (cx)
@@ -120,22 +116,22 @@ ADDR is a register containing the base chunk address."
          (addr (u/gba/thumb-loc k/syms :data-chunk-0)))
     (u/gba/thumb-get32 k/syms cx :var-cx)
     (u/gba/thumb-get32 k/syms cy :var-cy)
-    (k/render-current-chunks-offset-helper :render-chunk-16-16 addr
-      (lambda () (u/gba/emit! `(mov r0 ,cx) `(mov r1 ,cy))))
-    (k/render-current-chunks-offset-helper :render-chunk-0-16 addr
-      (lambda () (u/gba/emit! `(sub r0 ,cx 1) `(mov r1 ,cy))))
-    (k/render-current-chunks-offset-helper :render-chunk-32-16 addr
-      (lambda () (u/gba/emit! `(add r0 ,cx 1) `(mov r1 ,cy))))
-    (k/render-current-chunks-offset-helper :render-chunk-16-0 addr
-      (lambda () (u/gba/emit! `(mov r0 ,cx) `(sub r1 ,cy 1))))
-    (k/render-current-chunks-offset-helper :render-chunk-16-32 addr
-      (lambda () (u/gba/emit! `(mov r0 ,cx) `(add r1 ,cy 1))))
     (k/render-current-chunks-offset-helper :render-chunk-0-0 addr
       (lambda () (u/gba/emit! `(sub r0 ,cx 1) `(sub r1 ,cy 1))))
+    (k/render-current-chunks-offset-helper :render-chunk-16-0 addr
+      (lambda () (u/gba/emit! `(mov r0 ,cx) `(sub r1 ,cy 1))))
     (k/render-current-chunks-offset-helper :render-chunk-32-0 addr
       (lambda () (u/gba/emit! `(add r0 ,cx 1) `(sub r1 ,cy 1))))
+    (k/render-current-chunks-offset-helper :render-chunk-0-16 addr
+      (lambda () (u/gba/emit! `(sub r0 ,cx 1) `(mov r1 ,cy))))
+    (k/render-current-chunks-offset-helper :render-chunk-16-16 addr
+      (lambda () (u/gba/emit! `(mov r0 ,cx) `(mov r1 ,cy))))
+    (k/render-current-chunks-offset-helper :render-chunk-32-16 addr
+      (lambda () (u/gba/emit! `(add r0 ,cx 1) `(mov r1 ,cy))))
     (k/render-current-chunks-offset-helper :render-chunk-0-32 addr
       (lambda () (u/gba/emit! `(sub r0 ,cx 1) `(add r1 ,cy 1))))
+    (k/render-current-chunks-offset-helper :render-chunk-16-32 addr
+      (lambda () (u/gba/emit! `(mov r0 ,cx) `(add r1 ,cy 1))))
     (k/render-current-chunks-offset-helper :render-chunk-32-32 addr
       (lambda () (u/gba/emit! `(add r0 ,cx 1) `(add r1 ,cy 1))))))
 

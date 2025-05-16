@@ -132,12 +132,10 @@
   "Given REG, return its 3-bit encoding."
   (cl-case reg
     (r8 0) (r9 1) (r10 2) (r11 3) (r12 4) (r13 5) (r14 6) (r15 7)
-    (t (error "Invalid HI register: %s" reg))))
+    (t nil)))
 (defun u/gba/thumb-assemble-ins-hi (op src dest)
   "Given OP, SRC, and DEST produce 2 bytes."
-  (let* ( (rs (u/gba/thumb-assemble-reg src))
-          (hs (u/gba/thumb-assemble-ins-hi-reg src))
-          (rd (u/gba/thumb-assemble-reg dest))
+  (let* ( (hs (u/gba/thumb-assemble-ins-hi-reg src))
           (hd (u/gba/thumb-assemble-ins-hi-reg dest)))
     (u/split16le
       (logior
@@ -145,8 +143,8 @@
         (lsh (u/gba/thumb-assemble-ins-hi-op op) 8)
         (lsh (u/gba/thumb-assemble-flag hd) 7)
         (lsh (u/gba/thumb-assemble-flag hs) 6)
-        (lsh (or hs rs) 3)
-        (or hd rd)))))
+        (lsh (or hs (u/gba/thumb-assemble-reg src)) 3)
+        (or hd (u/gba/thumb-assemble-reg dest))))))
 
 (defun u/gba/thumb-assemble-ins-pcrelativeload (dest offset)
   "Given DEST and OFFSET produce 2 bytes."

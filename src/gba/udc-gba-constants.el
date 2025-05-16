@@ -11,6 +11,7 @@
 (defconst u/gba/arm-regs-callee-saved '(r4 r5 r6 r7 r8 r9 r10))
 (defconst u/gba/thumb-regs-callee-saved '(r4 r5 r6))
 (defconst u/gba/thumb-regs-pushed '(r1 r2 r3 r4 r5 r6))
+(defconst u/gba/thumb-regs-high '(r8 r9 r10))
 (defconst u/gba/regs-arg '(r0 r1 r2 r3))
 (defconst u/gba/arm-regs-all '(r0 r1 r2 r3 r4 r5 r6 r7 r8 r9 r10))
 (defconst u/gba/scratch 'r0)

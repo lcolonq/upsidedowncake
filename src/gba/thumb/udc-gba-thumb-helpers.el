@@ -27,7 +27,8 @@ Callee-saved registers will be available."
   `(let* ((u/gba/codegen
             (u/gba/make-codegen
               :type 'thumb
-              :regs-available (copy-sequence u/gba/thumb-regs-callee-saved))))
+              :regs-available (copy-sequence u/gba/thumb-regs-callee-saved)
+              :high-regs-available (copy-sequence u/gba/thumb-regs-high))))
      (u/gba/emit! ,@body)
      (u/gba/codegen-extract-with-literals ,symtab :code ,sym t)))
 
@@ -267,13 +268,17 @@ containing the loop counter."
   (u/gba/emit!
     (u/gba/scope
       (let ( (idx (u/gba/thumb-fresh-constant start))
-             (max (if (u/gba/thumb-reg? end) end (u/gba/thumb-fresh-constant end))))
+             (max (if (u/gba/thumb-reg? end) end (u/gba/thumb-fresh-constant end)))
+             (maxhi (u/gba/fresh-high!)))
+        (message "maxhi: %s" maxhi)
         (u/gba/emit!
+          `(movhi ,maxhi ,max)
           :loop)
+        (u/gba/claim! max)
         (funcall f idx)
         (u/gba/emit!
           `(inc ,idx 1)
-          `(cmp ,idx ,max)
+          `(cmphi ,idx ,maxhi)
           '(blt :loop))))))
 
 (defun u/gba/dispcnt-flag (f)

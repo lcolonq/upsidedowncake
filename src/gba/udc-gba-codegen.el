@@ -21,6 +21,7 @@
 (cl-defstruct (u/gba/codegen (:constructor u/gba/make-codegen))
   (type 'arm) ;; either 'arm or 'thumb
   (regs-available nil) ;; list of registers that are available for us
+  (high-regs-available nil) ;; list of high registers that are available for us (only in thumb)
   (instructions nil) ;; reversed list of generated instructions
   (local-labels (ht-create)) ;; mapping from label keywords to word offsets from start
   (literals (u/gba/make-literals)) ;; literal pool information
@@ -229,7 +230,9 @@ Registers from the enclosing scope will be available."
             (u/gba/make-codegen
               :type (u/gba/codegen-type (u/gba/codegen))
               :literals (u/gba/codegen-literals (u/gba/codegen))
-              :regs-available (copy-sequence (u/gba/codegen-regs-available (u/gba/codegen))))))
+              :regs-available (copy-sequence (u/gba/codegen-regs-available (u/gba/codegen)))
+              :high-regs-available (copy-sequence (u/gba/codegen-high-regs-available (u/gba/codegen)))
+              )))
      (u/gba/emit-body! ,@body)
      (u/gba/codegen-extract)))
 
@@ -256,6 +259,13 @@ Registers from the enclosing scope will be available."
   (unless (u/gba/codegen-regs-available u/gba/codegen)
     (error "No more registers are available"))
   (pop (u/gba/codegen-regs-available u/gba/codegen)))
+(defun u/gba/fresh-high! ()
+  "Return a new high register and mark it as unusable for the rest of the context."
+  (unless u/gba/codegen
+    (error "Attempted to obtain fresh high register outside of code generation context"))
+  (unless (u/gba/codegen-high-regs-available u/gba/codegen)
+    (error "No more high registers are available"))
+  (pop (u/gba/codegen-high-regs-available u/gba/codegen)))
 (defun u/gba/burn! (&rest rs)
   "Mark registers RS as unusable for the rest of the current codegen context."
   (let ((regs (u/gba/codegen-regs-available (u/gba/codegen))))
