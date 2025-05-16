@@ -114,9 +114,9 @@ LEN is the total number of instructions being generated."
           (:const ;; constant in the literal pool
             (let ((rd (cadr ins)) (lit (caddr ins)))
               (cond
-                ((and (eq ty 'arm) (<= lit #xff))
+                ((and (eq ty 'arm) (>= lit 0) (<= lit #xff))
                   `(mov ,rd ,lit))
-                ((and (eq ty 'thumb) (<= lit #xff))
+                ((and (eq ty 'thumb) (>= lit 0) (<= lit #xff))
                   `(movi ,rd ,lit))
                 (t
                   (let* ( (loc
@@ -168,11 +168,11 @@ Return a pair of the code for the header and the code for the footer for TY."
                   (bx ,u/gba/arm-lr))))
       (thumb `( ( (push (lr ,u/gba/thumb-fp))
                   (addsp ,u/gba/thumb-fp 0)
-                  (push ,u/gba/thumb-regs-callee-saved)
+                  (push ,u/gba/thumb-regs-pushed)
                   (decsp ,bytes)
                   )
-                . ( (pop ,u/gba/thumb-regs-callee-saved)
-                    (incsp ,bytes)
+                . ( (incsp ,bytes)
+                    (pop ,u/gba/thumb-regs-pushed)
                     (pop (pc ,u/gba/thumb-fp))))))))
 (defun u/gba/codegen-collect (f inss)
   "Call F on elements of INSS along with the number of accumulated results."

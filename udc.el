@@ -6,7 +6,7 @@
 (require 'f)
 
 ;;;; Load all features
-(defconst udc/base-dir (or (f-dirname load-file-name) default-directory))
+(defconst udc/base-dir (or (and load-file-name (f-dirname load-file-name)) default-directory))
 (add-to-list 'load-path (f-join udc/base-dir "src/"))
 (add-to-list 'load-path (f-join udc/base-dir "src/gba/"))
 (add-to-list 'load-path (f-join udc/base-dir "src/gba/arm/"))

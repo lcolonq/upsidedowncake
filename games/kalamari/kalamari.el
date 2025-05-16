@@ -23,6 +23,7 @@
        "kalamari-library"
        "kalamari-world"
        "kalamari-engine"
+       "kalamari-mode-game"
        ))
   (-each k/libraries #'load-library)
   (u/gba/symtab-add! k/syms :header :header 'const

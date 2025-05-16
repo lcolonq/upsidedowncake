@@ -105,6 +105,9 @@ Instructions are sized at INSSZ."
     (u/gba/symtab-add-entry! symtab :reg-ie (u/gba/make-symtab-entry :addr #x04000200 :type 'var :data 2))
     (u/gba/symtab-add-entry! symtab :reg-if (u/gba/make-symtab-entry :addr #x04000202 :type 'var :data 2))
     (u/gba/symtab-add-entry! symtab :reg-ime (u/gba/make-symtab-entry :addr #x04000208 :type 'var :data 1))
+    (u/gba/symtab-add-entry! symtab :reg-debug-string (u/gba/make-symtab-entry :addr #x04fff600 :type 'var :data #x100))
+    (u/gba/symtab-add-entry! symtab :reg-debug-flags (u/gba/make-symtab-entry :addr #x04fff700 :type 'var :data 2))
+    (u/gba/symtab-add-entry! symtab :reg-debug-enable (u/gba/make-symtab-entry :addr #x04fff780 :type 'var :data 2))
     (u/gba/symtab-add-entry! symtab :palette-bg (u/gba/make-symtab-entry :addr #x05000000 :type 'var :data 512))
     (u/gba/symtab-add-entry! symtab :palette-sprite (u/gba/make-symtab-entry :addr #x05000200 :type 'var :data 512))
 

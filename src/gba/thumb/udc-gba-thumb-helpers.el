@@ -140,7 +140,7 @@ X is either a register name or a constant."
                 (let ((r (u/gba/fresh!)))
                   (when (> x #xff)
                     (error "Constant %s larger than 8 bits" x))
-                  (u/gba/emit! `(mov ,r ,(logand #x000000ff x)))
+                  (u/gba/thumb-constant r (logand #xff x))
                   r))
               (t (error "Don't know how to write value: %s" x)))))
         (u/gba/emit!
