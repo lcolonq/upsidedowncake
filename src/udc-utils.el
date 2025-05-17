@@ -138,9 +138,11 @@ Return a list of the width, height, and pixels of the image."
 
 (defun u/load-image-png (path)
   "Load the PNG image at PATH (by converting to Farbfeld first)."
-  (let ((tmp "/tmp/udcff.ff"))
-    (when (= 0 (call-process-shell-command (format "png2ff <'%s' >'%s'" path tmp) nil "*udc-png-error*"))
-      (u/load-image-ff tmp))))
+  (let ((tmp (make-temp-file "udcff.ff")))
+    (unwind-protect
+      (when (= 0 (call-process-shell-command (format "png2ff <'%s' >'%s'" path tmp) nil "*udc-png-error*"))
+        (u/load-image-ff tmp))
+      (delete-file tmp))))
 
 (defun u/pixel-grayscale (p)
   "Given a list of red, green, and blue bytes P, convert it to one grayscale byte."
