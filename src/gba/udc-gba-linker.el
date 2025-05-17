@@ -235,7 +235,19 @@ SIZE is the length of the resulting vector."
     (-concat
       (u/gba/arm-assemble-ins ;; place an ARM jump to entrypoint at the start
         `(b ,(or (u/gba/symtab-lookup-relative 4 symtab (/ addr 4) (u/gba/header-entry header)) -2)))
-      (u/pad-to 156 '()) ;; nintendo logo
+      ;; nintendo logo - see Sega v. Accolade
+      (u/pad-to 156 '(
+           #x24 #xFF #xAE #x51 #x69 #x9A #xA2 #x21 #x3D #x84 #x82 #x0A #x84 #xE4 #x09 #xAD 
+           #x11 #x24 #x8B #x98 #xC0 #x81 #x7F #x21 #xA3 #x52 #xBE #x19 #x93 #x09 #xCE #x20 
+	   #x10 #x46 #x4A #x4A #xF8 #x27 #x31 #xEC #x58 #xC7 #xE8 #x33 #x82 #xE3 #xCE #xBF 
+	   #x85 #xF4 #xDF #x94 #xCE #x4B #x09 #xC1 #x94 #x56 #x8A #xC0 #x13 #x72 #xA7 #xFC 
+	   #x9F #x84 #x4D #x73 #xA3 #xCA #x9A #x61 #x58 #x97 #xA3 #x27 #xFC #x03 #x98 #x76 
+	   #x23 #x1D #xC7 #x61 #x03 #x04 #xAE #x56 #xBF #x38 #x84 #x00 #x40 #xA7 #x0E #xFD 
+	   #xFF #x52 #xFE #x03 #x6F #x95 #x30 #xF1 #x97 #xFB #xC0 #x85 #x60 #xD6 #x80 #x25 
+	   #xA9 #x63 #xBE #x03 #x01 #x4E #x38 #xE2 #xF9 #xA2 #x34 #xFF #xBB #x3E #x03 #x44 
+	   #x78 #x00 #x90 #xCB #x88 #x11 #x3A #x94 #x65 #xC0 #x7C #x63 #x87 #xF0 #x3C #xAF 
+	   #xD6 #x25 #xE4 #x8B #x38 #x0A #xAC #x72 #x21 #xD4 #xF8 #x07
+	 ))
       (u/pad-to 12 (seq-into (s-upcase (u/gba/header-title header)) 'list) #x00) ;; game title
       (u/pad-to 4 (seq-into (s-upcase (u/gba/header-code header)) 'list) #x00) ;; game code
       (u/pad-to 2 (seq-into (s-upcase (u/gba/header-maker header)) 'list) #x00) ;; maker code
