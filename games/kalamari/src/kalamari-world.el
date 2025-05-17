@@ -4,41 +4,16 @@
 ;;;; Library imports
 (require 'udc)
 (require 'kalamari-syms)
-
-(defconst k/chunk-size 16)
-(defconst k/world-width 4)
-(defconst k/world-height 2)
+(require 'kalamari-world-gen)
 
 (defconst k/chunk-idx 0)
 (defun k/add-chunk (chunk)
   "Add a world CHUNK to the ROM."
   (u/gba/symtab-add! k/syms :data (intern (format ":data-chunk-%s" k/chunk-idx)) 'bytes chunk)
   (cl-incf k/chunk-idx))
-(k/add-chunk
-  '( 1 1 1 1 2 2 2 2 1 1 1 1 1 1 1 1
-     1 1 1 1 2 2 2 2 1 1 1 2 1 1 2 1
-     1 1 3 1 1 2 2 1 1 1 1 2 1 1 2 1
-     1 1 1 1 1 2 1 1 1 1 1 2 2 2 2 1
-     1 1 1 1 1 2 1 1 1 1 1 2 1 1 2 1
-     1 2 2 2 2 2 1 1 1 1 1 2 1 1 2 1
-     1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
-     1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
-     1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
-     1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
-     1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
-     1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
-     1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
-     1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
-     1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
-     1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1))
-(k/add-chunk (-repeat (* k/chunk-size k/chunk-size) 3))
-(k/add-chunk (-repeat (* k/chunk-size k/chunk-size) 4))
-(k/add-chunk (-repeat (* k/chunk-size k/chunk-size) 5))
-(k/add-chunk (-repeat (* k/chunk-size k/chunk-size) 6))
-(k/add-chunk (-repeat (* k/chunk-size k/chunk-size) 7))
-(k/add-chunk (-repeat (* k/chunk-size k/chunk-size) 8))
-(k/add-chunk (-repeat (* k/chunk-size k/chunk-size) 9))
-(k/add-chunk (-repeat (* k/chunk-size k/chunk-size) 10))
+
+(--each (-iota (* k/world-width k/world-height))
+  (k/add-chunk (k/extract-chunk it)))
 (u/gba/symtab-add! k/syms :data :data-chunk-empty 'bytes (-repeat (* k/chunk-size k/chunk-size) 0))
 
 (defun k/render-chunk-at (name destx desty)
@@ -56,10 +31,8 @@ This function loads a 16x16 chunk to DESTX,DESTY in VRAM."
            (quad (* 1024 (+ (if (>= destx 32) 1 0) (if (>= desty 32) 2 0) ))))
       (u/gba/thumb-for dy (+ k/chunk-size dy)
         (lambda (y)
-          (message "regs y: %s" (u/gba/codegen-regs-available u/gba/codegen))
           (u/gba/thumb-for dx (+ k/chunk-size dx)
             (lambda (x)
-              (message "regs x: %s" (u/gba/codegen-regs-available u/gba/codegen))
               (u/gba/thumb-constant tmp quad)
               (u/gba/emit!
                 `(lslx ,offset ,y 5) ;; assemble the index in the tilemap
@@ -134,6 +107,36 @@ ADDR is a register containing the base chunk address."
       (lambda () (u/gba/emit! `(mov r0 ,cx) `(add r1 ,cy 1))))
     (k/render-current-chunks-offset-helper :render-chunk-32-32 addr
       (lambda () (u/gba/emit! `(add r0 ,cx 1) `(add r1 ,cy 1))))))
+
+(u/gba/thumb-function k/syms :walkable? ;; x in r0, y in r1
+  ;; Return nonzero if the tile at global coordinate x, y is walkable
+  (u/gba/claim! 'r2 'r3)
+  (let ( (cx (u/gba/fresh!)) (cy (u/gba/fresh!))
+         (x (u/gba/fresh!)) (y (u/gba/fresh!))
+         (tmp (u/gba/thumb-fresh-constant (- k/chunk-size 1))))
+    (message "regs: %s" (u/gba/codegen-regs-available u/gba/codegen))
+    (u/gba/emit!
+      `(asrx ,cx r0 ,(truncate (log k/chunk-size 2)))
+      `(asrx ,cy r1 ,(truncate (log k/chunk-size 2)))
+      `(and r0 ,tmp) `(mov ,x r0)
+      `(and r1 ,tmp) `(mov ,y r1))
+    (u/gba/emit!
+      `(mov r0 ,cx) `(mov r1 ,cy))
+    (u/gba/thumb-call k/syms :chunk-index)
+    (u/gba/emit!
+      `(cmpi r0 0))
+    (u/gba/thumb-if-cond 'ge
+      (lambda ()
+        (u/gba/emit!
+          `(lslx r1 ,y ,(truncate (log k/chunk-size 2)))
+          `(add r1 r1 ,x)
+          '(add r0 r0 r1))
+        (u/gba/claim! 'r1)
+        (u/gba/thumb-get8 k/syms tmp (cons :data-chunk-0 'r0))
+        (u/gba/emit!
+          `(mov r0 ,tmp)))
+      (lambda ()
+        (u/gba/thumb-constant 'r0 0)))))
 
 (provide 'kalamari-world)
 ;;; kalamari-world.el ends here

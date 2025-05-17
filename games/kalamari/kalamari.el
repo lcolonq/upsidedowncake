@@ -21,6 +21,7 @@
        "kalamari-assets"
        "kalamari-state"
        "kalamari-library"
+       "kalamari-world-gen"
        "kalamari-world"
        "kalamari-engine"
        "kalamari-mode-game"
@@ -33,7 +34,7 @@
     (--map
       (cons (format "%s" (car it)) (format "0x%x" (u/gba/symtab-entry-addr (cdr it))))
       (ht->alist (u/gba/symtab-symbols k/syms))))
-  (defconst k/linked (u/gba/link k/syms u/gba/rom-start #x25000))
+  (defconst k/linked (u/gba/link k/syms u/gba/rom-start #x250000))
   (f-write-bytes
     (apply #'unibyte-string (seq-into k/linked 'list))
     (f-join k/base-path "kalamari.gba")))

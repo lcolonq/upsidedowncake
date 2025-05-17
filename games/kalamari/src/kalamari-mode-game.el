@@ -10,27 +10,22 @@
   (u/gba/claim! 'r0 'r1 'r2 'r3)
   (u/gba/scope
     (-let ( (addr (u/gba/thumb-loc k/syms :var-x))
-            (r (u/gba/fresh!)))
-      (k/if-pressed k/syms 'left t
+            (tx (u/gba/fresh!)) (ty (u/gba/fresh!)))
+      (u/gba/thumb-get32 k/syms tx addr)
+      (u/gba/thumb-get32 k/syms ty (cons addr 4))
+      (k/if-pressed k/syms 'left t (lambda () (u/gba/emit! `(dec ,tx 1))))
+      (k/if-pressed k/syms 'right t (lambda () (u/gba/emit! `(inc ,tx 1))))
+      (k/if-pressed k/syms 'up t (lambda () (u/gba/emit! `(dec ,ty 1))))
+      (k/if-pressed k/syms 'down t (lambda () (u/gba/emit! `(inc ,ty 1))))
+      (u/gba/emit! `(mov r0 ,tx) `(mov r1 ,ty))
+      (u/gba/thumb-call k/syms :walkable?)
+      (u/gba/thumb-if 'r0
         (lambda ()
-          (u/gba/thumb-get32 k/syms r addr)
-          (u/gba/emit! `(dec ,r 1))
-          (u/gba/thumb-set32 k/syms addr r)))
-      (k/if-pressed k/syms 'right t
-        (lambda ()
-          (u/gba/thumb-get32 k/syms r addr)
-          (u/gba/emit! `(inc ,r 1))
-          (u/gba/thumb-set32 k/syms addr r)))
-      (k/if-pressed k/syms 'up t
-        (lambda ()
-          (u/gba/thumb-get32 k/syms r (cons addr 4))
-          (u/gba/emit! `(dec ,r 1))
-          (u/gba/thumb-set32 k/syms (cons addr 4) r)))
-      (k/if-pressed k/syms 'down t
-        (lambda ()
-          (u/gba/thumb-get32 k/syms r (cons addr 4))
-          (u/gba/emit! `(inc ,r 1))
-          (u/gba/thumb-set32 k/syms (cons addr 4) r))))))
+          (u/gba/thumb-set32 k/syms addr tx)
+          (u/gba/thumb-set32 k/syms (cons addr 4) ty)))
+      ;; (u/gba/thumb-set32 k/syms addr tx)
+      ;; (u/gba/thumb-set32 k/syms (cons addr 4) ty)
+      )))
 
 (u/gba/thumb-function k/syms :mode-game-update
   (u/gba/claim! 'r0 'r1 'r2 'r3)

@@ -10,7 +10,7 @@
 
 ;;;; Assets
 ;;;;; World map tiles and palette
-(defvar k/source-tiles (u/gba/image-load-png-palette (f-join k/base-path "assets/tiles.png")))
+(defvar k/source-tiles (u/gba/image-load-png-palette (f-join k/base-path "assets/tiles.png") t))
 (defconst k/image-tiles (car k/source-tiles))
 (defconst k/palette-tiles (cdr k/source-tiles))
 (defconst k/tiledata-tiles (--mapcat it (u/gba/image-tiledata k/image-tiles)))
