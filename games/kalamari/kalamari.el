@@ -23,6 +23,7 @@
        "kalamari-library"
        "kalamari-world-gen"
        "kalamari-world"
+       "kalamari-battle"
        "kalamari-engine"
        "kalamari-mode-game"
        ))

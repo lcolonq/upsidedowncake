@@ -6,30 +6,69 @@
 (require 'kalamari-syms)
 (require 'kalamari-engine)
 
-(u/gba/thumb-function k/syms :mode-game-handle-key-input
+(u/gba/thumb-function k/syms :mode-game-handle-key-input-move
   (u/gba/claim! 'r0 'r1 'r2 'r3)
   (u/gba/scope
-    (-let ( (addr (u/gba/thumb-loc k/syms :var-x))
+    (-let ( (moving (u/gba/thumb-fresh-constant 0))
             (tx (u/gba/fresh!)) (ty (u/gba/fresh!)))
-      (u/gba/thumb-get32 k/syms tx addr)
-      (u/gba/thumb-get32 k/syms ty (cons addr 4))
-      (k/if-pressed k/syms 'left t (lambda () (u/gba/emit! `(dec ,tx 1))))
-      (k/if-pressed k/syms 'right t (lambda () (u/gba/emit! `(inc ,tx 1))))
-      (k/if-pressed k/syms 'up t (lambda () (u/gba/emit! `(dec ,ty 1))))
-      (k/if-pressed k/syms 'down t (lambda () (u/gba/emit! `(inc ,ty 1))))
-      (u/gba/emit! `(mov r0 ,tx) `(mov r1 ,ty))
-      (u/gba/thumb-call k/syms :walkable?)
-      (u/gba/thumb-if 'r0
+      (u/gba/thumb-get32 k/syms tx :var-x)
+      (u/gba/thumb-get32 k/syms ty :var-y)
+      (k/if-pressed k/syms 'left t (lambda () (u/gba/emit! `(inc ,moving 1) `(dec ,tx 1))))
+      (k/if-pressed k/syms 'right t (lambda () (u/gba/emit! `(inc ,moving 1) `(inc ,tx 1))))
+      (k/if-pressed k/syms 'up t (lambda () (u/gba/emit! `(inc ,moving 1) `(dec ,ty 1))))
+      (k/if-pressed k/syms 'down t (lambda () (u/gba/emit! `(inc ,moving 1) `(inc ,ty 1))))
+      (u/gba/thumb-if moving
         (lambda ()
-          (u/gba/thumb-set32 k/syms addr tx)
-          (u/gba/thumb-set32 k/syms (cons addr 4) ty)))
-      ;; (u/gba/thumb-set32 k/syms addr tx)
-      ;; (u/gba/thumb-set32 k/syms (cons addr 4) ty)
-      )))
+          (u/gba/emit! `(mov r0 ,tx) `(mov r1 ,ty))
+          (u/gba/thumb-call k/syms :walkable?)
+          (u/gba/thumb-if 'r0
+            (lambda ()
+              (u/gba/thumb-set32 k/syms :var-x tx)
+              (u/gba/thumb-set32 k/syms :var-y ty)
+              (u/gba/thumb-call k/syms :random)
+              (u/gba/thumb-constant tx #xf)
+              (u/gba/emit!
+                `(and r0 ,tx)
+                `(cmpi r0 0))
+              (u/gba/thumb-if-cond 'eq
+                (lambda ()
+                  (u/gba/thumb-call k/syms :random-encounter))))))))))
+
+(u/gba/thumb-function k/syms :mode-game-handle-key-input-battle
+  (u/gba/claim! 'r2 'r3)
+  (k/if-pressed k/syms 'up t
+    (lambda ()
+      (u/gba/thumb-call k/syms :cursor-up)
+      (u/gba/thumb-call k/syms :render-cursor)))
+  (k/if-pressed k/syms 'down t
+    (lambda ()
+      (u/gba/thumb-call k/syms :cursor-down)
+      (u/gba/thumb-call k/syms :render-cursor)))
+  (k/if-pressed k/syms 'a t
+    (lambda ()
+      (let ((cur (u/gba/fresh!)))
+        (u/gba/thumb-get32 k/syms cur :var-cursor)
+        (u/gba/emit! `(cmpi ,cur 0))
+        (u/gba/thumb-if-cond 'eq ;; hit
+          (lambda ()
+            (u/gba/thumb-call k/syms :battle-hit)))
+        (u/gba/emit! `(cmpi ,cur 1))
+        (u/gba/thumb-if-cond 'eq ;; stand
+          (lambda ()
+            (u/gba/thumb-call k/syms :battle-stand)))
+        (u/gba/emit! `(cmpi ,cur 2))
+        (u/gba/thumb-if-cond 'eq ;; flee
+          (lambda ()
+            (u/gba/thumb-call k/syms :battle-flee)))))))
 
 (u/gba/thumb-function k/syms :mode-game-update
-  (u/gba/claim! 'r0 'r1 'r2 'r3)
-  (u/gba/thumb-call k/syms :mode-game-handle-key-input))
+  (let ((battling (u/gba/fresh!)))
+    (u/gba/thumb-get32 k/syms battling :var-battle-target)
+    (u/gba/thumb-if battling
+      (lambda () ;; battling
+        (u/gba/thumb-call k/syms :mode-game-handle-key-input-battle))
+      (lambda () ;; walking around
+        (u/gba/thumb-call k/syms :mode-game-handle-key-input-move)))))
 
 (u/gba/thumb-function k/syms :mode-game-render
   (u/gba/claim! 'r0 'r1 'r2 'r3)

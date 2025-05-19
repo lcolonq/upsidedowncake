@@ -17,6 +17,25 @@
           `(ldr ,tmp r1 ,mulidx)
           `(str ,tmp r0 ,mulidx))))))
 
+(u/gba/thumb-function k/syms :wordset ;; dest in r0, srcword in r1, len in r2
+  ;; Set LEN 32-bit words in DEST to SRC
+  (u/gba/thumb-for 0 'r2
+    (lambda (idx)
+      (let ((mulidx (u/gba/fresh!)))
+        (u/gba/emit!
+          `(lslx ,mulidx ,idx 2)
+          `(str r1 r0 ,mulidx))))))
+
+(u/gba/thumb-function k/syms :random
+  ;; https://en.wikipedia.org/wiki/Xorshift
+  (let ((tmp (u/gba/fresh!)))
+    (u/gba/thumb-get32 k/syms 'r0 :var-rng)
+    (u/gba/emit!
+      `(lslx ,tmp r0 13) `(eor r0 ,tmp)
+      `(lsrx ,tmp r0 17) `(eor r0 ,tmp)
+      `(lslx ,tmp r0 5) `(eor r0 ,tmp))
+    (u/gba/thumb-set32 k/syms :var-rng 'r0)))
+
 (u/gba/thumb-function k/syms :debug-enable
   ;; Enable MGBA debugging features
   (u/gba/thumb-set16 k/syms :reg-debug-enable #xc0de)

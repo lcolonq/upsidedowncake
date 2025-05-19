@@ -56,6 +56,24 @@ If DUP is non-nil, do not remove duplicate tiles."
       (u/gba/image-tiles (u/gba/image-quantize-palette-exact pal) img dup)
       pal)))
 
+(defun u/gba/image-load-pngs-palette (ps)
+  "Load the images from paths in PS and derive a combined palette.
+Each entry in PS should either be a path string or a list of a path string
+and properties."
+  (let* ( (psnorm (--map (if (listp it) it (list it)) ps))
+          (imgs
+            (--map
+              (cons (or (u/load-image-png (car it)) (error "Failed to load image at: %s" (car it)))
+                (cdr it))
+              psnorm))
+          (colors (cons '(#xd7 #x7b #xba) (-uniq (--mapcat (seq-into (caddar it) 'list) imgs))))
+          (pal (u/gba/make-palette :colors colors)))
+    (cons
+      pal
+      (--map
+        (u/gba/image-tiles (u/gba/image-quantize-palette-exact pal) (car it) (plist-member (cdr it) :duplicate))
+        imgs))))
+
 (cl-defstruct (u/gba/image (:constructor u/gba/make-image))
   width
   height

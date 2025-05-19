@@ -1,0 +1,17 @@
+* To build
+#+begin_src shell
+emacs --script kalamari.el
+#+end_src
+
+This will generate a Game Boy Advance ROM file ~kalamari.gba~ in the current directory.
+I've only tested this with my Emacs - there are a couple of dependencies, namely ~dash~, ~f~, ~s~, and ~ht~.
+You likely already have these, and if you don't you can install them using your method of choice.
+* To run
+You'll need a Game Boy Advance emulator to run the ROM.
+I've only tested with [[https://mgba.io/][mGBA]], so I'd recommend using that one.
+It probably runs on other emulators, and probably also on real hardware too!
+(But I haven't had time to test this just yet.)
+
+#+begin_src shell
+mgba-qt kalamari.gba
+#+end_src

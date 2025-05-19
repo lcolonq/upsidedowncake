@@ -5,6 +5,7 @@
 (require 'udc)
 (require 'kalamari-syms)
 (require 'kalamari-state)
+(require 'kalamari-battle)
 
 ;;;; "Engine" code
 (u/gba/arm-toplevel k/syms :interrupt-handler
@@ -29,7 +30,10 @@
   (u/gba/thumb-call k/syms :debug-print 14 :data-string-test)
   (u/gba/thumb-call k/syms :initialize-state)
   (u/gba/thumb-call k/syms :load-assets)
-  (u/gba/thumb-bgcnt k/syms 0 :64x64tiles :charblock0 :screenblock28 :8bpp)
+  (u/gba/thumb-bgcnt k/syms 0 :64x64tiles :charblock0 :screenblock28 :8bpp :priority3) ;; tiles
+  (u/gba/thumb-bgcnt k/syms 1 :32x32tiles :charblock1 :screenblock27 :8bpp :priority2) ;; battle screen
+  (u/gba/thumb-bgcnt k/syms 2 :32x32tiles :charblock2 :screenblock14 :8bpp :priority1) ;; monster images
+  (u/gba/thumb-bgcnt k/syms 3 :32x32tiles :charblock3 :screenblock15 :8bpp :priority0) ;; font
   (u/gba/thumb-dispcnt k/syms :videomode0 :object1d :bg0 :sprites)
   (u/gba/thumb-set16 k/syms (u/gba/sprite-attr1 0) (logior #b0010000000000000 76))
   (u/gba/thumb-set16 k/syms (u/gba/sprite-attr2 0) 116)
@@ -87,12 +91,19 @@ SYMTAB is used to lookup the appropriate register address."
 
 (u/gba/thumb-function k/syms :update
   (u/gba/claim! 'r0 'r1 'r2 'r3)
+  (u/gba/thumb-call k/syms :random)
   (u/gba/thumb-call k/syms :handle-user-input)
-  (u/gba/thumb-call k/syms :mode-game-update))
+  (let ((mode (u/gba/fresh!)))
+    (u/gba/thumb-get32 k/syms mode :var-mode)
+    (u/gba/emit! `(cmpi ,mode ,k/MODE-GAME))
+    (u/gba/thumb-if-cond 'eq (lambda () (u/gba/thumb-call k/syms :mode-game-update)))))
 
 (u/gba/thumb-function k/syms :render
   (u/gba/claim! 'r0 'r1 'r2 'r3)
-  (u/gba/thumb-call k/syms :mode-game-render))
+  (let ((mode (u/gba/fresh!)))
+    (u/gba/thumb-get32 k/syms mode :var-mode)
+    (u/gba/emit! `(cmpi ,mode ,k/MODE-GAME))
+    (u/gba/thumb-if-cond 'eq (lambda () (u/gba/thumb-call k/syms :mode-game-render)))))
   
 (provide 'kalamari-engine)
 ;;; kalamari-engine.el ends here
