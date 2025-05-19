@@ -36,6 +36,13 @@
       `(lslx ,tmp r0 5) `(eor r0 ,tmp))
     (u/gba/thumb-set32 k/syms :var-rng 'r0)))
 
+(u/gba/thumb-function k/syms :hide-all-sprites
+  (u/gba/thumb-for 0 1024
+    (lambda (idx)
+      (u/gba/thumb-set16 k/syms (cons :oam idx) #b0000001000000000)
+      (u/gba/emit!
+        `(inc ,idx 7)))))
+
 (u/gba/thumb-function k/syms :debug-enable
   ;; Enable MGBA debugging features
   (u/gba/thumb-set16 k/syms :reg-debug-enable #xc0de)

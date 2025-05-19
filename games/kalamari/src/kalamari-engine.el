@@ -30,6 +30,7 @@
   (u/gba/thumb-call k/syms :debug-print 14 :data-string-test)
   (u/gba/thumb-call k/syms :initialize-state)
   (u/gba/thumb-call k/syms :load-assets)
+  (u/gba/thumb-call k/syms :hide-all-sprites)
   (u/gba/thumb-bgcnt k/syms 0 :64x64tiles :charblock0 :screenblock28 :8bpp :priority3) ;; tiles
   (u/gba/thumb-bgcnt k/syms 1 :32x32tiles :charblock1 :screenblock27 :8bpp :priority2) ;; battle screen
   (u/gba/thumb-bgcnt k/syms 2 :32x32tiles :charblock2 :screenblock14 :8bpp :priority1) ;; monster images
