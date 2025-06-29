@@ -23,18 +23,5 @@
 (u/gba/symtab-add! k/syms :vars :var-rng 'var 4) ;; current rng state
 (u/gba/symtab-add! k/syms :vars :var-cursor 'var 4) ;; menu cursor
 
-(u/gba/thumb-function k/syms :initialize-state
-  (u/gba/thumb-set32 k/syms :var-mode k/MODE-GAME)
-  (u/gba/thumb-set16 k/syms :var-keys-last 0) (u/gba/thumb-set16 k/syms :var-keys-new 0)
-  (u/gba/thumb-set32 k/syms :var-x 0) (u/gba/thumb-set32 k/syms :var-y 0)
-  (u/gba/thumb-set32 k/syms :var-cx 1) (u/gba/thumb-set32 k/syms :var-cy 1)
-  (u/gba/thumb-set32 k/syms :var-battle-draw 0)
-  (u/gba/thumb-set32 k/syms :var-battle-total 0)
-  (u/gba/thumb-set32 k/syms :var-battle-bust 15)
-  (u/gba/thumb-set32 k/syms :var-battle-target 0)
-  (u/gba/thumb-set32 k/syms :var-rng #xdeadbeef) ;; seed the rng. we advance every frame so it works out
-  (u/gba/thumb-set32 k/syms :var-cursor 0)
-  )
-
 (provide 'kalamari-state)
 ;;; kalamari-state.el ends here

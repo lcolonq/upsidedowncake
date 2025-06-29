@@ -1,0 +1,8 @@
+* What improvements can we do?
+- main menu / title screen
+- restart game from game over screen
+- there needs to be a goal to the game
+  + we are generating a maze but
+    there is no point to the maze
+- the battles need to be not so easy
+- also the battles should be explained, somewhat

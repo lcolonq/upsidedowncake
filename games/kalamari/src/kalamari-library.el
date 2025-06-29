@@ -17,6 +17,14 @@
           `(ldr ,tmp r1 ,mulidx)
           `(str ,tmp r0 ,mulidx))))))
 
+(u/gba/thumb-function k/syms :wordcpy-dma ;; dest in r0, src in r1, len in r2
+  ;; Copy LEN 32-bit words from SRC to DEST using DMA
+  (u/gba/thumb-set32 k/syms :reg-dma3dad 'r0)
+  (u/gba/thumb-set32 k/syms :reg-dma3sad 'r1)
+  (let ((flags (u/gba/thumb-fresh-constant #b10000100000000000000000000000000)))
+    (u/gba/emit! `(orr r2 ,flags))
+    (u/gba/thumb-set32 k/syms :reg-dma3cnt 'r2)))
+
 (u/gba/thumb-function k/syms :wordset ;; dest in r0, srcword in r1, len in r2
   ;; Set LEN 32-bit words in DEST to SRC
   (u/gba/thumb-for 0 'r2

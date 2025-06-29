@@ -1,1 +1,3 @@
 .direnv/*
+.gdb_history
+*.so

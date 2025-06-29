@@ -28,21 +28,21 @@
   (u/gba/claim! 'r0 'r1 'r2 'r3)
   (u/gba/thumb-call k/syms :debug-enable)
   (u/gba/thumb-call k/syms :debug-print 14 :data-string-test)
-  (u/gba/thumb-call k/syms :initialize-state)
-  (u/gba/thumb-call k/syms :load-assets)
   (u/gba/thumb-call k/syms :hide-all-sprites)
   (u/gba/thumb-bgcnt k/syms 0 :64x64tiles :charblock0 :screenblock28 :8bpp :priority3) ;; tiles
   (u/gba/thumb-bgcnt k/syms 1 :32x32tiles :charblock1 :screenblock27 :8bpp :priority2) ;; battle screen
   (u/gba/thumb-bgcnt k/syms 2 :32x32tiles :charblock2 :screenblock14 :8bpp :priority1) ;; monster images
   (u/gba/thumb-bgcnt k/syms 3 :32x32tiles :charblock3 :screenblock15 :8bpp :priority0) ;; font
-  (u/gba/thumb-dispcnt k/syms :videomode0 :object1d :bg0 :sprites)
   (u/gba/thumb-set16 k/syms (u/gba/sprite-attr1 0) (logior #b0010000000000000 76))
   (u/gba/thumb-set16 k/syms (u/gba/sprite-attr2 0) 116)
+  (u/gba/thumb-call k/syms :mode-titlescreen-activate)
   '(b :mainloop)) ;; start the main loop!
 
 (u/gba/arm-toplevel k/syms :main
   (u/gba/claim! 'r0 'r1 'r2 'r3)
   (u/gba/arm-call k/syms :enable-interrupts)
+  (u/gba/arm-set16 k/syms :var-keys-last 0) (u/gba/arm-set16 k/syms :var-keys-new 0)
+  (u/gba/arm-set32 k/syms :var-rng #xdeadbeef) ;; seed the rng. we advance every frame so it works out
   (let ((r (u/gba/arm-loc k/syms :thumb-main)))
     (u/gba/emit! ;; switch to Thumb
       `(add ,r ,r 1)
@@ -96,8 +96,12 @@ SYMTAB is used to lookup the appropriate register address."
   (u/gba/thumb-call k/syms :handle-user-input)
   (let ((mode (u/gba/fresh!)))
     (u/gba/thumb-get32 k/syms mode :var-mode)
+    (u/gba/emit! `(cmpi ,mode ,k/MODE-TITLESCREEN))
+    (u/gba/thumb-if-cond 'eq (lambda () (u/gba/thumb-call k/syms :mode-titlescreen-update)))
     (u/gba/emit! `(cmpi ,mode ,k/MODE-GAME))
-    (u/gba/thumb-if-cond 'eq (lambda () (u/gba/thumb-call k/syms :mode-game-update)))))
+    (u/gba/thumb-if-cond 'eq (lambda () (u/gba/thumb-call k/syms :mode-game-update)))
+    (u/gba/emit! `(cmpi ,mode ,k/MODE-GAMEOVER))
+    (u/gba/thumb-if-cond 'eq (lambda () (u/gba/thumb-call k/syms :mode-gameover-update)))))
 
 (u/gba/thumb-function k/syms :render
   (u/gba/claim! 'r0 'r1 'r2 'r3)

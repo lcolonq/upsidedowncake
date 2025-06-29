@@ -6,6 +6,20 @@
 (require 'kalamari-syms)
 (require 'kalamari-engine)
 
+(u/gba/thumb-function k/syms :mode-game-activate
+  (u/gba/thumb-set32 k/syms :var-mode k/MODE-GAME)
+  (u/gba/thumb-set32 k/syms :var-x 0) (u/gba/thumb-set32 k/syms :var-y 0)
+  (u/gba/thumb-set32 k/syms :var-cx 1) (u/gba/thumb-set32 k/syms :var-cy 1)
+  (u/gba/thumb-set32 k/syms :var-battle-draw 0)
+  (u/gba/thumb-set32 k/syms :var-battle-total 0)
+  (u/gba/thumb-set32 k/syms :var-battle-bust 15)
+  (u/gba/thumb-set32 k/syms :var-battle-target 0)
+  (u/gba/thumb-set32 k/syms :var-cursor 0)
+  (u/gba/thumb-call k/syms :wordcpy :palette-bg :data-palette-bg 128)
+  (u/gba/thumb-call k/syms :wordcpy :vram-bg-charblock1 :data-tiledata-battle (/ (length k/tiledata-battle) 4))
+  (u/gba/thumb-call k/syms :wordcpy :vram-bg-screenblock27 :data-tilemap-battle (/ (length k/tilemap-battle) 4))
+  (u/gba/thumb-dispcnt k/syms :videomode0 :object1d :bg0 :sprites))
+
 (u/gba/thumb-function k/syms :mode-game-handle-key-input-move
   (u/gba/claim! 'r0 'r1 'r2 'r3)
   (u/gba/scope

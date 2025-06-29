@@ -6,20 +6,6 @@
 (require 'kalamari-syms)
 (require 'kalamari-assets)
 
-(u/gba/thumb-function k/syms :game-over
-  (u/gba/thumb-set32 k/syms :var-mode k/MODE-GAMEOVER)
-  (u/gba/thumb-call k/syms :wordcpy :palette-bg :data-palette-gameover 128)
-  (u/gba/thumb-call k/syms :wordcpy :vram-bg-charblock1 :data-tiledata-gameover (/ (length k/tiledata-gameover) 4))
-  (u/gba/thumb-call k/syms :wordcpy :vram-bg-screenblock27 :data-tilemap-gameover (/ (length k/tilemap-gameover) 4))
-  (u/gba/thumb-dispcnt k/syms :videomode0 :object1d :bg1))
-
-(u/gba/thumb-function k/syms :game-over
-  (u/gba/thumb-set32 k/syms :var-mode k/MODE-GAMEOVER)
-  (u/gba/thumb-call k/syms :wordcpy :palette-bg :data-palette-gameover 128)
-  (u/gba/thumb-call k/syms :wordcpy :vram-bg-charblock1 :data-tiledata-gameover (/ (length k/tiledata-gameover) 4))
-  (u/gba/thumb-call k/syms :wordcpy :vram-bg-screenblock27 :data-tilemap-gameover (/ (length k/tilemap-gameover) 4))
-  (u/gba/thumb-dispcnt k/syms :videomode0 :object1d :bg1))
-
 (u/gba/thumb-function k/syms :render-text ;; x in r0, y in r1, text address in r2
   ;; Render a 0xFF-terminated string to the text background at cell X, Y
   (let ( (tmp (u/gba/fresh!))
@@ -114,7 +100,7 @@
       (u/gba/emit! `(cmp ,total ,draw))
       (u/gba/thumb-if-cond 'gt
         (lambda ()
-          (u/gba/thumb-call k/syms :game-over))))))
+          (u/gba/thumb-call k/syms :mode-gameover-activate))))))
 
 (u/gba/thumb-function k/syms :battle-stand
   (let ( (target (u/gba/fresh!))
@@ -125,7 +111,7 @@
       `(cmp ,total ,target))
     (u/gba/thumb-if-cond 'lt
       (lambda ()
-        (u/gba/thumb-call k/syms :game-over))
+        (u/gba/thumb-call k/syms :mode-gameover-activate))
       (lambda ()
         (u/gba/thumb-get32 k/syms total :var-battle-bust)
         (u/gba/emit! `(cmpi ,total ,21))
@@ -147,7 +133,7 @@
         (u/gba/thumb-set32 k/syms :var-battle-bust bust)
         (u/gba/thumb-call k/syms :end-battle))
       (lambda ()
-        (u/gba/thumb-call k/syms :game-over)))))
+        (u/gba/thumb-call k/syms :mode-gameover-activate)))))
 
 (u/gba/thumb-function k/syms :end-battle
   (u/gba/thumb-dispcnt k/syms :videomode0 :object1d :bg0 :sprites) ;; disable layers

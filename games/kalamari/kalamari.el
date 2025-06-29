@@ -25,7 +25,9 @@
        "kalamari-world"
        "kalamari-battle"
        "kalamari-engine"
+       "kalamari-mode-titlescreen"
        "kalamari-mode-game"
+       "kalamari-mode-gameover"
        ))
   (-each k/libraries #'load-library)
   (u/gba/symtab-add! k/syms :header :header 'const

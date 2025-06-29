@@ -23,7 +23,7 @@
 
 ;;;; Graphics
 ;;;;; Backgrounds
-(defconst k/source-bg
+(defvar k/source-bg
   (u/gba/image-load-pngs-palette
     `( (,(f-join k/base-path "assets/tiles.png") :duplicate t)
        ,(f-join k/base-path "assets/battle.png")
@@ -55,7 +55,16 @@
   "Convert STR to a list of font indices."
   (-concat (-map #'k/font-index (seq-into str 'list)) (list #xff)))
 
-(defconst k/source-gameover (u/gba/image-load-png-palette (f-join k/base-path "assets/gameover.png")))
+(defvar k/source-titlescreen (u/gba/image-load-png-palette (f-join k/base-path "assets/titlescreen.png")))
+(defconst k/palette-titlescreen (cdr k/source-titlescreen))
+(defconst k/image-titlescreen (car k/source-titlescreen))
+(defconst k/tiledata-titlescreen (--mapcat it (u/gba/image-tiledata k/image-titlescreen)))
+(defconst k/tilemap-titlescreen (--mapcat (list (cdr it) 0) (u/gba/image-cell-indices k/image-titlescreen)))
+(u/gba/symtab-add! k/syms :data :data-palette-titlescreen 'bytes (u/gba/palette-bytes k/palette-titlescreen))
+(u/gba/symtab-add! k/syms :data :data-tiledata-titlescreen 'bytes k/tiledata-titlescreen)
+(u/gba/symtab-add! k/syms :data :data-tilemap-titlescreen 'bytes k/tilemap-titlescreen)
+
+(defvar k/source-gameover (u/gba/image-load-png-palette (f-join k/base-path "assets/gameover.png")))
 (defconst k/palette-gameover (cdr k/source-gameover))
 (defconst k/image-gameover (car k/source-gameover))
 (defconst k/tiledata-gameover (--mapcat it (u/gba/image-tiledata k/image-gameover)))
@@ -64,7 +73,7 @@
 (u/gba/symtab-add! k/syms :data :data-tiledata-gameover 'bytes k/tiledata-gameover)
 (u/gba/symtab-add! k/syms :data :data-tilemap-gameover 'bytes k/tilemap-gameover)
 
-(defconst k/source-youwin (u/gba/image-load-png-palette (f-join k/base-path "assets/youwin.png")))
+(defvar k/source-youwin (u/gba/image-load-png-palette (f-join k/base-path "assets/youwin.png")))
 (defconst k/palette-youwin (cdr k/source-youwin))
 (defconst k/image-youwin (car k/source-youwin))
 (defconst k/tiledata-youwin (--mapcat it (u/gba/image-tiledata k/image-youwin)))
@@ -116,22 +125,6 @@
 (u/gba/symtab-add! k/syms :data :data-string-bustat 'bytes (k/font-string "bust at         "))
 (u/gba/symtab-add! k/syms :data :data-string-totalis 'bytes (k/font-string "total is        "))
 (u/gba/symtab-add! k/syms :data :data-string-drew 'bytes (k/font-string "drew            "))
-
-;;;; Loading some fixed assets into VRAM
-(u/gba/thumb-function k/syms :load-assets
-  (u/gba/thumb-call k/syms :wordcpy :palette-bg :data-palette-bg 128)
-  (u/gba/thumb-call k/syms :wordcpy :palette-sprite :data-palette-player 128)
-
-  (u/gba/thumb-call k/syms :wordcpy :vram-bg-charblock0 :data-tiledata-tiles (/ (length k/tiledata-tiles) 4))
-  (u/gba/thumb-call k/syms :wordcpy :vram-bg-charblock1 :data-tiledata-battle (/ (length k/tiledata-battle) 4))
-  (u/gba/thumb-call k/syms :wordcpy :vram-bg-screenblock27 :data-tilemap-battle (/ (length k/tilemap-battle) 4))
-  (u/gba/thumb-call k/syms :wordcpy :vram-bg-charblock3 :data-tiledata-font (/ (length k/tiledata-font) 4))
-
-  (u/gba/thumb-call k/syms :wordset :vram-bg-screenblock15
-    (logior (ash (k/font-index ? ) 16) (k/font-index ? )) (/ 2048 4))
-
-  (u/gba/thumb-call k/syms :wordcpy :vram-sprite-charblock0 :data-tiledata-player (/ (length k/tiledata-player) 4))
-  )
 
 (provide 'kalamari-assets)
 ;;; kalamari-assets.el ends here
