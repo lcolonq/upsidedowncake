@@ -188,16 +188,24 @@ We assume that PROG starts in memory at word BASE.
 Instructions are sized at INSSZ."
   (--map-indexed (u/gba/relocate-ins inssz symtab (+ base it-index) it) prog))
 
-(defun u/gba/link (symtab base size)
-  "Convert SYMTAB to a vector of bytes to be placed at address BASE.
-SIZE is the length of the resulting vector."
+(defun u/gba/link (symtab base)
+  "Convert SYMTAB to a vector of bytes to be placed at address BASE."
   (condition-case res
-    (let* ((mem (make-vector size 0))
+    (let* ( (size
+              (-max
+                (--map
+                  (-
+                    (+
+                      (u/gba/symtab-entry-addr it)
+                      (u/gba/symtab-entry-length symtab (u/gba/symtab-entry-addr it) it))
+                    base)
+                  (ht-values (u/gba/symtab-symbols symtab)))))
+            (mem (make-vector size 0))
             (memwrite
               (lambda (name addr idx bytes)
-                (if (and (>= idx 0) (< (+ idx (length bytes)) size))
+                (if (and (>= idx 0) (<= (+ idx (length bytes)) size))
                   (u/write! mem idx bytes)
-                  (warn "Symbol table entry %s at %s is out of bounds" name addr)))))
+                  (warn "Symbol table entry %s (length %s) at %s is out of bounds" name (length bytes) addr)))))
       (--each (ht->alist (u/gba/symtab-symbols symtab))
         (let* ( (name (car it))
                 (entry (cdr it))

@@ -1,3 +1,5 @@
 .direnv/*
 .gdb_history
 *.so
+*.o
+TAGS

@@ -1,8 +1,11 @@
-OBJECTS = build/main.o build/utils.o build/arm.o
-CFLAGS = -Wall -g -fPIC -Ideps/ -Isrc/
-LDFLAGS = -shared
+SRCS = src/main.c src/utils.c src/arm.c
+OBJECTS = $(SRCS:src/%.c=build/%.o)
 
-.PHONY: all clean test
+CHK_SOURCES ?= $(SRCS)
+CFLAGS ?= -Wall -Wextra -Wpedantic --std=c23 -g -fPIC -Ideps/ -Isrc/
+LDFLAGS ?= -shared
+
+.PHONY: all clean test check-syntax
 
 all: shim.so udc_gba_emu.so
 
@@ -15,7 +18,7 @@ shim.so: build/shim.o
 build:
 	mkdir build/
 
-build/%.o: src/%.c build
+build/%.o: src/%.c | build
 	gcc -o $@ -c $< $(CFLAGS)
 
 clean:
@@ -23,5 +26,10 @@ clean:
 	rm -r build/
 
 test: udc_gba_emu.so
-#	emacs --batch --load=$< '--eval=(print (u/gba/c-emulate (vector 1 2 3 4)))'
-	emacs --batch --load=$< '--eval=(print (u/gba/c-emulate nil))'
+	emacs --batch --load=$< '--eval=(print (u/gba/c-emulate (vector 1 2 3 4)))'
+
+TAGS: $(SRCS)
+	etags $^
+
+check-syntax: TAGS
+	gcc $(CFLAGS) -fsyntax-only $(CHK_SOURCES)
