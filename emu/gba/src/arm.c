@@ -116,6 +116,7 @@ static bool shift_apply(emu *e, u32 ins, u32 sh, u32 *v, bool imm) {
     return false;
 }
 static inline bool is_carry(u64 res) { return res > 0xffffffff; }
+// probably broken
 static inline bool is_overflow(s64 res) { return res > 0x80000000 || res < -0x80000000; }
 
 // instruction decoding helpers
@@ -203,7 +204,7 @@ static inline void a_dataprocessing(emu *e, u32 ins, u32 op2, u32 shiftc) {
     if (opcode >> 2 != 0b10) sr(e, rd, res); // if not TST, TEQ, CMP, CMN
     if (s) { e->cpsr.n = n; e->cpsr.z = z; e->cpsr.c = c; e->cpsr.v = v; }
 }
-static inline void emulate_loadstore(emu *e, u32 ins, u32 off) {
+static inline void a_loadstore(emu *e, u32 ins, u32 off) {
     bool p = flag(ins, 24);
     bool u = flag(ins, 23);
     bool b = flag(ins, 22);
@@ -221,7 +222,7 @@ static inline void emulate_loadstore(emu *e, u32 ins, u32 off) {
     else if (b) mem_write8(e, addr, r(e, rd)); else mem_write32(e, addr, r(e, rd));
     if (!p || w) sr(e, rn, addrpost);
 }
-static inline void emulate_loadstorehalfword(emu *e, u32 ins, u32 off) {
+static inline void a_loadstorehalfword(emu *e, u32 ins, u32 off) {
     bool p = flag(ins, 24);
     bool u = flag(ins, 23);
     bool w = flag(ins, 21);
@@ -322,11 +323,11 @@ static inline bool emulate_arm(emu *e) {
         u32 hi = ins >> 8 & 0xf;
         u32 lo = ins & 0xf;
         u32 off = hi << 4 | lo;
-        emulate_loadstorehalfword(e, ins, off);
+        a_loadstorehalfword(e, ins, off);
     } else if (a_disc3(ins) == 0b000 && flag(ins, 22) == 0 && flag(ins, 7) == 1 && flag(ins, 4) == 1) {
         // load/store 16-bit, offset in register
         u32 off = r(e, a_rm(ins));
-        emulate_loadstorehalfword(e, ins, off);
+        a_loadstorehalfword(e, ins, off);
     } else if (a_disc3(ins) == 0b001) {
         // data processing, op2 is rotated immediate
         u32 imm = ins & 0xff;
@@ -346,12 +347,12 @@ static inline bool emulate_arm(emu *e) {
     } else if (a_disc3(ins) == 0b010) {
         // load/store, offset in immediate
         u32 imm = ins && 0xfff;
-        emulate_loadstore(e, ins, imm);
+        a_loadstore(e, ins, imm);
     } else if (a_disc3(ins) == 0b011 && flag(ins, 4) == 0) {
         // load/store, offset in register shifted by immediate
         u32 v = r(e, a_rm(ins));
         (void) shift_apply(e, ins, ins >> 7 & 0b1111, &v, true);
-        emulate_loadstore(e, ins, v);
+        a_loadstore(e, ins, v);
     } else if (a_disc3(ins) == 0b100) {
         // load/store multiple registers
         bool p = flag(ins, 24);
@@ -397,6 +398,31 @@ static inline u32 t_disc8(u32 ins) { return ins >> 8 & 0xff; }
 static inline u32 t_rm(u32 ins) { return ins >> 6 & 0b111; }
 static inline u32 t_rn(u32 ins) { return ins >> 3 & 0b111; }
 static inline u32 t_rd(u32 ins) { return ins & 0b111; }
+
+static inline void t_loadstore(emu *e, u32 ins, u32 off, bool b) {
+    bool l = flag(ins, 11);
+    reg rn = t_rn(ins);
+    reg rd = t_rd(ins);
+    u32 addr = r(e, rn);
+    addr += off;
+    u32 misalign = addr & 0b11;
+    u32 rot = (4 - misalign) << 3;
+    if (!b) addr &= 0b11111111111111111111111111111100;
+    if (l) if (b) sr(e, rd, mem_read8(e, addr)); else sr(e, rd, ror(mem_read32(e, addr), rot));
+    else if (b) mem_write8(e, addr, r(e, rd)); else mem_write32(e, addr, r(e, rd));
+}
+
+static inline void t_loadstorehalfword(emu *e, u32 ins, u32 off, bool h) {
+    bool l = flag(ins, 11);
+    reg rn = t_rn(ins);
+    reg rd = t_rd(ins);
+    u32 addr = r(e, rn);
+    addr += off;
+    if (l) {
+        if (h) sr(e, rd, mem_read16(e, addr));
+        else sr(e, rd, sext(mem_read8(e, addr)));
+    } else mem_write16(e, addr, r(e, rd));
+}
 
 static inline bool emulate_thumb(emu *e) {
     u32 pc = r(e, PC);
@@ -497,17 +523,31 @@ static inline bool emulate_thumb(emu *e) {
     } else if (a_disc6(ins) == 0b010001) {
         // hi register operations / branch exchange
         thop op = ins >> 8 & 0b11;
-        reg r1 = t_rn(ins); if (flag(ins, 6)) r1 += R8;
-        reg r2 = t_rd(ins); if (flag(ins, 7)) r2 += R8;
+        reg rm = t_rn(ins); if (flag(ins, 6)) rm += R8;
+        reg rd = t_rd(ins); if (flag(ins, 7)) rd += R8;
         switch (op) {
-        case THOP_ADD:
+        case THOP_ADD: { 
+            u32 op1 = r(e, rm);
+            u32 op2 = r(e, rd);
+            u32 res = op1 + op2;
+            sr(e, rd, res);
             break;
-        case THOP_CMP:
+        }
+        case THOP_CMP: {
+            u32 op1 = r(e, rm);
+            u32 op2 = r(e, rd);
+            u32 res = op2 - op1;
+            e->cpsr.n = res >> 31 & 0b1;
+            e->cpsr.z = res == 0;
+            e->cpsr.c = !(op1 > op2);
+            e->cpsr.n = is_overflow((s64) op2 - (s64) op1);
             break;
+        }
         case THOP_MOV:
+            sr(e, rd, r(e, rm));
             break;
         case THOP_BX:
-            u32 addr = r(e, r1);
+            u32 addr = r(e, rm);
             bool thumb = addr & 0b1;
             if (thumb) {
                 e->instruction_set = INS_THUMB;
@@ -534,30 +574,100 @@ static inline bool emulate_thumb(emu *e) {
         sr(e, t_rd(ins), res);
     } else if (a_disc5(ins) == 0b11100) {
         // unconditional branch
+        u32 uoff = ins & 0b11111111111;
+        uoff <<= 1;
+        uoff = (((s32) uoff) << 20) >> 20;
+        sr(e, PC, pc + 2 + uoff);
     } else if (a_disc5(ins) == 0b11101) {
         // undefined instruction
+        debug("undefined instruction");
+        return false;
     } else if (a_disc5(ins) == 0b11110) {
         // branch with link prefix
     } else if (a_disc5(ins) == 0b11111) {
         // branch with link suffix
+    } else if (a_disc5(ins) == 0b01001) {
+        // load/store to/from pc offset
+        reg rd = ins >> 8 & 0b111;
+        u32 off = ins & 0xff;
+        off *= 4;
+        u32 addr = pc + 2 + off;
+        sr(e, rd, mem_read32(e, addr));
     } else if (a_disc4(ins) == 0b0101 && flag(ins, 9) == 0) {
         // load/store word or byte register
+        u32 off = r(e, t_rm(ins));
+        t_loadstore(e, ins, off, flag(ins, 10));
     } else if (a_disc4(ins) == 0b0101 && flag(ins, 9) == 1) {
         // load/store halfword register
+        u32 off = r(e, t_rm(ins));
+        t_loadstorehalfword(e, ins, off, flag(ins, 11));
     } else if (a_disc4(ins) == 0b1000) {
         // load/store halfword immediate
+        u32 off = ins >> 6 & 0b11111;
+        t_loadstorehalfword(e, ins, off, false);
     } else if (a_disc4(ins) == 0b1001) {
-        // load/store to/from stack
+        // load/store to/from stack offset
+        bool l = flag(ins, 11);
+        reg rd = ins >> 8 & 0b111;
+        u32 off = ins & 0xff;
+        off *= 4;
+        u32 addr = r(e, SP) + off;
+        if (l) sr(e, rd, mem_read32(e, addr)); else mem_write32(e, addr, r(e, rd));
     } else if (a_disc4(ins) == 0b1010) {
         // add/subtract to/from SP or PC
+        reg rd = ins >> 8 & 0b111;
+        bool sp = flag(ins, 11);
+        u32 off = ins & 0xff;
+        u32 base = sp ? r(e, SP) : r(e, PC) & 0xfffffffc;
+        sr(e, rd, base + off);
     } else if (a_disc4(ins) == 0b1011 && flag(ins, 10) == 0) {
         // adjust stack pointer
+        bool sub = flag(ins, 7);
+        u32 off = ins & 0b1111111;
+        u32 base = r(e, SP);
+        u32 res = sub ? base - off : base + off;
+        sr(e, SP, res);
     } else if (a_disc4(ins) == 0b1011 && flag(ins, 10) == 1) {
         // push/pop register list
+        bool l = flag(ins, 11);
+        bool extra = flag(ins, 8);
+        u32 addr = r(e, SP);
+        u32 reglist = ins & 0xff;
+        if (!l && extra) mem_write32(e, addr, r(e, LR));
+        for (ptrdiff_t j = 0; j < 8; ++j) {
+            ptrdiff_t i = l ? i : 7 - i;
+            bool set = reglist >> i & 0b1;
+            if (set) {
+                if (l) sr(e, i, mem_read32(e, addr));
+                else mem_write32(e, addr, r(e, i));
+                addr = l ? addr + 4 : addr - 4;
+            }
+        }
+        if (l && extra) sr(e, PC, mem_read32(e, addr));
     } else if (a_disc4(ins) == 0b1100) {
         // load/store multiple
+        bool l = flag(ins, 11);
+        reg rn = ins >> 8 & 0b111;
+        u32 addr = r(e, rn);
+        u32 reglist = ins & 0xff;
+        for (ptrdiff_t i = 0; i < 8; ++i) {
+            bool set = reglist >> i & 0b1;
+            if (set) {
+                if (l) sr(e, i, mem_read32(e, addr));
+                else mem_write32(e, addr, r(e, i));
+                addr += 4;
+            }
+        }
+        sr(e, rn, addr);
     } else if (a_disc4(ins) == 0b1101) {
         // conditional branch
+        cond c = ins >> 8 & 0xf;
+        if (cond_satisfied(e, c)) {
+            u32 uoff = ins & 0xff;
+            uoff <<= 1;
+            uoff = (((s32) uoff) << 23) >> 23;
+            sr(e, PC, pc + 2 + uoff);
+        }
     } else if (a_disc3(ins) == 0b000) {
         // shift by immediate
     } else if (a_disc3(ins) == 0b001) {
@@ -574,6 +684,8 @@ static inline bool emulate_thumb(emu *e) {
         if (write) sr(e, t_rd(ins), res);
     } else if (a_disc3(ins) == 0b011) {
         // load/store word or byte immediate
+        u32 off = ins >> 6 & 0b11111;
+        t_loadstore(e, ins, off, flag(ins, 12));
     }
     return true;
 }

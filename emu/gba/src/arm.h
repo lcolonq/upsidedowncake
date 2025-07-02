@@ -51,7 +51,8 @@ typedef enum reg {
     REG_COUNT,
 } reg;
 #define PC R15
-#define LR R15
+#define LR R14
+#define SP R13
 
 typedef struct cpsr {
     bool n; bool z; bool c; bool v;
