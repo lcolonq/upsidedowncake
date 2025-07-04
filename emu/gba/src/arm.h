@@ -11,6 +11,16 @@ typedef int16_t s16;
 typedef int32_t s32;
 typedef int64_t s64;
 
+typedef enum mode {
+    MODE_USR = 0b10000,
+    MODE_FIQ = 0b10001,
+    MODE_IRQ = 0b10010,
+    MODE_SVC = 0b10011,
+    MODE_ABT = 0b10111,
+    MODE_UND = 0b11011,
+    MODE_SYS = 0b11111,
+} mode;
+
 typedef enum cond {
     COND_EQ = 0b0000, COND_NE = 0b0001,
     COND_CS = 0b0010, COND_CC = 0b0011,
@@ -53,9 +63,19 @@ typedef enum reg {
 #define PC R15
 #define LR R14
 #define SP R13
+typedef enum reg_fiq {
+    R8_FIQ = 8, R9_FIQ, R10_FIQ, R11_FIQ, R12_FIQ, R13_FIQ, R14_FIQ,
+} reg_fiq;
+typedef enum reg_irq { R13_IRQ = 13, R14_IRQ, } reg_irq;
+typedef enum reg_svc { R13_SVC = 13, R14_SVC, } reg_svc;
+typedef enum reg_abt { R13_ABT = 13, R14_ABT, } reg_abt;
+typedef enum reg_und { R13_UND = 13, R14_UND, } reg_und;
 
 typedef struct cpsr {
-    bool n; bool z; bool c; bool v;
+    bool n, z, c, v;
+    bool i, f, t;
+    u32 dnm;
+    mode mode;
 } cpsr;
 
 typedef struct mem {
@@ -65,10 +85,16 @@ typedef struct mem {
 } mem;
 
 typedef struct emu {
-    enum { INS_ARM, INS_THUMB } instruction_set;
     u32 reg[REG_COUNT];
+    u32 reg_fiq[7], reg_irq[2], reg_svc[2], reg_abt[2], reg_und[2];
     cpsr cpsr;
+    cpsr spsr_fiq, spsr_irq, spsr_svc, spsr_abt, spsr_und;
     mem mem;
+    bool branched;
 } emu;
 
+cpsr make_cpsr(u32 x);
+u32 cpsr_to_u32(cpsr x);
+bool emulate_arm_ins(emu *e, u32 ins);
+bool emulate_thumb_ins(emu *e, u16 ins);
 void emulate(emu *e, u32 fuel);

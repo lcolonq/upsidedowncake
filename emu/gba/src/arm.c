@@ -9,6 +9,34 @@
 #include "arm.h"
 #include "utils.h"
 
+// building structs
+cpsr make_cpsr(u32 x) {
+    cpsr ret;
+    ret.n = x >> 31 & 0b1;
+    ret.z = x >> 30 & 0b1;
+    ret.c = x >> 29 & 0b1;
+    ret.v = x >> 28 & 0b1;
+    ret.dnm = x >> 8 & 0b11111111111111111111;
+    ret.i = x >> 7 & 0b1;
+    ret.f = x >> 6 & 0b1;
+    ret.t = x >> 5 & 0b1;
+    ret.mode = x & 0b11111;
+    return ret;
+}
+u32 cpsr_to_u32(cpsr x) {
+    return
+        ((x.n & 0b1) << 31)
+        | ((x.z & 0b1) << 30)
+        | ((x.c & 0b1) << 29)
+        | ((x.v & 0b1) << 28)
+        | ((x.dnm & 0b11111111111111111111) << 8)
+        | ((x.i & 0b1) << 7)
+        | ((x.f & 0b1) << 6)
+        | ((x.t & 0b1) << 5)
+        | (x.mode & 0b11111)
+        ;
+}
+
 // memory access
 u8 *mem_loc(emu *e, u32 addr) {
     if (addr >= 0x02000000 && addr <= 0x0203FFFF) {
@@ -55,8 +83,18 @@ static inline void mem_write32(emu *e, u32 addr, u32 val) {
 }
 
 // utilities for implementing instructions
-static inline u32 r(emu *e, reg r) { return e->reg[r]; }
-static inline void sr(emu *e, reg r, u32 val) { e->reg[r] = val; }
+static inline u32 *reg_loc(emu *e, reg r) {
+    switch (e->cpsr.mode) {
+    case MODE_FIQ: return r >= R8 && r <= R14 ? &e->reg_fiq[r - R8] : &e->reg[r];
+    case MODE_IRQ: return r >= R13 && r <= R14 ? &e->reg_irq[r - R13] : &e->reg[r];
+    case MODE_SVC: return r >= R13 && r <= R14 ? &e->reg_svc[r - R13] : &e->reg[r];
+    case MODE_ABT: return r >= R13 && r <= R14 ? &e->reg_abt[r - R13] : &e->reg[r];
+    case MODE_UND: return r >= R13 && r <= R14 ? &e->reg_und[r - R13] : &e->reg[r];
+    default: return &e->reg[r];
+    }
+}
+static inline u32 r(emu *e, reg r) { return *reg_loc(e, r); }
+static inline void sr(emu *e, reg r, u32 val) { *reg_loc(e, r) = val; }
 static inline u32 ror(u32 v, u32 rot) {
     while (rot > 32) rot -= 32;
     return v >> rot | v << (32 - rot);
@@ -72,7 +110,7 @@ static bool cond_satisfied(emu *e, cond c) {
     case COND_HI: return e->cpsr.c && !e->cpsr.z; case COND_LS: return !e->cpsr.c || e->cpsr.z;
     case COND_GE: return e->cpsr.n == e->cpsr.v; case COND_LT: return e->cpsr.n != e->cpsr.v;
     case COND_GT: return !e->cpsr.z && e->cpsr.n == e->cpsr.v;
-    case COND_LE: return e->cpsr.z && e->cpsr.n != e->cpsr.v;
+    case COND_LE: return e->cpsr.z || e->cpsr.n != e->cpsr.v;
     case COND_AL: return true;
     default: return false;
     }
@@ -115,9 +153,14 @@ static bool shift_apply(emu *e, u32 ins, u32 sh, u32 *v, bool imm) {
     }
     return false;
 }
-static inline bool is_carry(u64 res) { return res > 0xffffffff; }
-// probably broken
-static inline bool is_overflow(s64 res) { return res > 0x80000000 || res < -0x80000000; }
+static inline bool is_negative(u32 x) { return x >> 31 & 0b1; }
+static inline bool is_carry(u64 res) { return res > 0xffffffffll; }
+static inline bool is_overflow_add(u32 op1, u32 op2, u32 res) {
+    return is_negative(op1) == is_negative(op2) && is_negative(op1) != is_negative(res);
+}
+static inline bool is_overflow_sub(u32 op1, u32 op2, u32 res) {
+    return is_negative(op1) != is_negative(op2) && is_negative(op1) != is_negative(res);
+}
 
 // instruction decoding helpers
 static inline cond a_cond(u32 ins) { return ins >> 28 & 0xf; }
@@ -135,14 +178,15 @@ static inline u32 a_disclo(u32 ins) { return ins >> 20 & 0b11; }
 static inline u32 a_immhi(u32 ins) { return ins >> 4 & 0xf; }
 
 // emulation
-static inline void a_dataprocessing(emu *e, u32 ins, u32 op2, u32 shiftc) {
+static inline void a_dataprocessing(emu *e, u32 ins, u32 op2, u32 shiftc, bool regop) {
     bool s = flag(ins, 20);
     reg rd = a_rd(ins);
-    u32 op1 = r(e, a_rn(ins));
+    reg rn = a_rn(ins);
+    u32 op1 = r(e, rn);
+    if (regop && rn == PC) op1 += 4; // PC reads as 4 higher if we're shifting a register
     u32 opcode = a_op(ins);
     u32 res = 0;
-    bool n = 0, z = 0, c = 0, v = 0;
-    debug("op: %d, rd is %d, rn is %d, r0 = %d, r2 = %d", opcode, rd, a_rn(ins), r(e, R0), r(e, R2));
+    bool n = e->cpsr.n, z = e->cpsr.z, c = e->cpsr.c, v = e->cpsr.v;
     switch (opcode) {
     case DPOP_AND: case DPOP_TST:
         res = op1 & op2;
@@ -155,32 +199,32 @@ static inline void a_dataprocessing(emu *e, u32 ins, u32 op2, u32 shiftc) {
     case DPOP_SUB: case DPOP_CMP:
         res = op1 - op2;
         c = !(op2 > op1);
-        v = is_overflow((s64) op1 - (s64) op2);
+        v = is_overflow_sub(op1, op2, res);
         break;
     case DPOP_RSB:
         res = op2 - op1;
         c = !(op1 > op2);
-        v = is_overflow((s64) op2 - (s64) op1);
+        v = is_overflow_sub(op2, op1, res);
         break;
     case DPOP_ADD: case DPOP_CMN:
         res = op1 + op2;
         c = is_carry((u64) op1 + (u64) op2);
-        v = is_overflow((s64) op1 + (s64) op2);
+        v = is_overflow_add(op1, op2, res);
         break;
     case DPOP_ADC:
         res = op1 + op2 + e->cpsr.c;
         c = is_carry((u64) op1 + (u64) op2 + (u64) e->cpsr.c);
-        v = is_overflow((s64) op1 + (s64) op2 + (s64) e->cpsr.c);
+        v = is_overflow_add(op1, op2, res);
         break;
     case DPOP_SBC:
         res = op1 - op2 + e->cpsr.c - 1;
         c = !(op2 + 1 > op1 + e->cpsr.c);
-        v = is_overflow((s64) op1 - (s64) op2 + (s64) e->cpsr.c - (s64) 1);
+        v = is_overflow_sub(op1, op2, res);
         break;
     case DPOP_RSC:
         res = op2 - op1 + e->cpsr.c - 1;
         c = !(op1 + 1 > op2 + e->cpsr.c);
-        v = is_overflow((s64) op2 - (s64) op1 + (s64) e->cpsr.c - (s64) 1);
+        v = is_overflow_sub(op2, op1, res);
         break;
     case DPOP_ORR:
         res = op1 | op2;
@@ -191,18 +235,37 @@ static inline void a_dataprocessing(emu *e, u32 ins, u32 op2, u32 shiftc) {
         c = shiftc;
         break;
     case DPOP_BIC:
-        res = op1 & !op2;
+        res = op1 & ~op2;
         c = shiftc;
         break;
     case DPOP_MVN:
-        res = !op2;
+        res = ~op2;
         c = shiftc;
         break;
     }
+    n = is_negative(res);
     z = res == 0;
-    n = res >> 31 & 0b1;
-    if (opcode >> 2 != 0b10) sr(e, rd, res); // if not TST, TEQ, CMP, CMN
-    if (s) { e->cpsr.n = n; e->cpsr.z = z; e->cpsr.c = c; e->cpsr.v = v; }
+    bool cmpop = opcode >> 2 == 0b10; // if TST, TEQ, CMP, CMN
+    if (!cmpop) {
+        sr(e, rd, res);
+        if (rd == PC) e->branched = true;
+    }
+    if (s) {
+        if (rd == PC) {
+            switch (e->cpsr.mode) {
+            case MODE_FIQ: e->cpsr = e->spsr_fiq; break;
+            case MODE_IRQ: e->cpsr = e->spsr_irq; break;
+            case MODE_SVC: e->cpsr = e->spsr_svc; break;
+            case MODE_ABT: e->cpsr = e->spsr_abt; break;
+            case MODE_UND: e->cpsr = e->spsr_und; break;
+            default:
+                e->cpsr.n = n; e->cpsr.z = z; e->cpsr.c = c; e->cpsr.v = v;
+                break;
+            }
+        } else {
+            e->cpsr.n = n; e->cpsr.z = z; e->cpsr.c = c; e->cpsr.v = v;
+        }
+    }
 }
 static inline void a_loadstore(emu *e, u32 ins, u32 off) {
     bool p = flag(ins, 24);
@@ -244,26 +307,24 @@ static inline void a_loadstorehalfword(emu *e, u32 ins, u32 off) {
     if (!p || w) sr(e, rn, addrpost);
 }
 
-static inline bool emulate_arm(emu *e) {
-    u32 pc = r(e, PC);
+bool emulate_arm_ins(emu *e, u32 ins) {
     // in ARM, the PC points to the instruction after the next instruction to execute
     // this is "Fucked Up" but we'll deal with it
     // see: https://stackoverflow.com/questions/24091566/why-does-the-arm-pc-register-point-to-the-instruction-after-the-next-one-to-be-e
-    u32 ins = mem_read32(e, pc - 4);
-    sr(e, PC, pc + 4);
+    e->branched = false;
     cond cond = a_cond(ins);
-    if (!cond_satisfied(e, cond)) return true;
+    if (!cond_satisfied(e, cond)) goto end;
     if (a_disc8(ins) == 0b00010010 && a_immhi(ins) == 0b0001) {
         // branch and exchange
         reg rn = a_rm(ins);
         u32 addr = r(e, rn);
         bool thumb = addr & 0b1;
         if (thumb) {
-            e->instruction_set = INS_THUMB;
+            e->cpsr.t = 1;
             addr &= 0b11111111111111111111111111111110;
             sr(e, PC, addr + 2);
         } else {
-            e->instruction_set = INS_ARM;
+            e->cpsr.t = 0;
             addr &= 0b11111111111111111111111111111100;
             sr(e, PC, addr + 4);
         }
@@ -280,7 +341,7 @@ static inline bool emulate_arm(emu *e) {
         sr(e, rd, res);
         if (s) {
             e->cpsr.z = res == 0;
-            e->cpsr.n = res >> 31 & 0b1;
+            e->cpsr.n = is_negative(res);
         }
     } else if (a_disc5(ins) == 0b00001 && a_immhi(ins) == 0b1001) {
         panic("multiply long");
@@ -334,16 +395,18 @@ static inline bool emulate_arm(emu *e) {
         u32 rot = (ins >> 8 & 0xf) << 1;
         u32 v = ror(imm, rot);
         bool shiftc = rot == 0 ? e->cpsr.c : imm >> (rot - 1) & 0b1;
-        a_dataprocessing(e, ins, v, shiftc);
+        a_dataprocessing(e, ins, v, shiftc, false);
     } else if (a_disc3(ins) == 0b000 && flag(ins, 4) == 0) {
         // data processing, op2 is register shifted by immediate
-        u32 v = r(e, a_rm(ins));
-        a_dataprocessing(e, ins, v, shift_apply(e, ins, ins >> 7 & 0b1111, &v, true));
+        reg reg = a_rm(ins);
+        u32 v = r(e, reg);
+        if (reg == PC) v += 4; // weird quirk with PC - it's 12 ahead instead of 8 in this case
+        a_dataprocessing(e, ins, v, shift_apply(e, ins, ins >> 7 & 0b1111, &v, true), true);
     } else if (a_disc3(ins) == 0b000 && flag(ins, 4) == 1) {
         // data processing, op2 is register shifted by register
         u32 v = r(e, a_rm(ins));
         u32 sh = r(e, a_rs(ins));
-        a_dataprocessing(e, ins, v, shift_apply(e, ins, sh, &v, false));
+        a_dataprocessing(e, ins, v, shift_apply(e, ins, sh, &v, false), false);
     } else if (a_disc3(ins) == 0b010) {
         // load/store, offset in immediate
         u32 imm = ins && 0xfff;
@@ -377,17 +440,25 @@ static inline bool emulate_arm(emu *e) {
     } else if (a_disc3(ins) == 0b101) {
         // branch (optionally with link)
         bool l = flag(ins, 24);
-        if (l) sr(e, LR, pc);
+        if (l) sr(e, LR, r(e, PC));
         u32 uoff = ins & 0xffffff;
         s32 soff = ((s32) (uoff << 8)) >> 8; // sign-extend from 24-bits to 32-bits
         soff <<= 2;
-        sr(e, PC, (s32) pc + 8 + soff);
+        sr(e, PC, (s32) r(e, PC) + 4 + soff);
     } else if (a_disc3(ins) == 0b011 && flag(ins, 4) == 1) {
         // undefined instructions
         debug("undefined");
         return false;
     }
+end:
+    u32 branch_offset = e->branched ? 8 : 4;
+    sr(e, PC, r(e, PC) + branch_offset);
     return true;
+}
+static inline bool emulate_arm(emu *e) {
+    u32 pc = r(e, PC);
+    u32 ins = mem_read32(e, pc - 4);
+    return emulate_arm_ins(e, ins);
 }
 
 static inline u32 t_disc3(u32 ins) { return ins >> 13 & 0b111; }
@@ -424,11 +495,8 @@ static inline void t_loadstorehalfword(emu *e, u32 ins, u32 off, bool h) {
     } else mem_write16(e, addr, r(e, rd));
 }
 
-static inline bool emulate_thumb(emu *e) {
-    u32 pc = r(e, PC);
+bool emulate_thumb_ins(emu *e, u16 ins) {
     // similar situation in Thumb - PC is 4 bytes ahead during instruction
-    u16 ins = mem_read32(e, pc - 2);
-    sr(e, PC, pc + 2);
     if (a_disc8(ins) == 0b11011111) {
         // software interrupt
         panic("software interrupt");
@@ -452,31 +520,31 @@ static inline bool emulate_thumb(emu *e) {
         case TDPOP_CMP:
             res = op1 - op2;
             c = !(op2 > op1);
-            v = is_overflow((s64) op1 - (s64) op2);
+            v = is_overflow_sub(op1, op2, res);
             break;
         case TDPOP_CMN:
             res = op1 + op2;
             c = is_carry((u64) op1 + (u64) op2);
-            v = is_overflow((s64) op1 + (s64) op2);
+            v = is_overflow_add(op1, op2, res);
             break;
         case TDPOP_ADC:
             res = op1 + op2 + e->cpsr.c;
             c = is_carry((u64) op1 + (u64) op2 + (u64) e->cpsr.c);
-            v = is_overflow((s64) op1 + (s64) op2 + (s64) e->cpsr.c);
+            v = is_overflow_add(op1, op2, res);
             break;
         case TDPOP_SBC:
             res = op1 - op2 + e->cpsr.c - 1;
             c = !(op2 + 1 > op1 + e->cpsr.c);
-            v = is_overflow((s64) op1 - (s64) op2 + (s64) e->cpsr.c - (s64) 1);
+            v = is_overflow_sub(op1, op2, res);
             break;
         case TDPOP_ORR:
             res = op1 | op2;
             break;
         case TDPOP_BIC:
-            res = op1 & !op2;
+            res = op1 & ~op2;
             break;
         case TDPOP_MVN:
-            res = !op2;
+            res = ~op2;
             break;
         case TDPOP_MUL:
             res = op1 * op2;
@@ -516,7 +584,7 @@ static inline bool emulate_thumb(emu *e) {
             break;
         }
         z = res == 0;
-        n = res >> 31 & 0b1;
+        n = is_negative(res);
         if (opcode != TDPOP_TST && opcode != TDPOP_CMP && opcode != TDPOP_CMN) sr(e, rd, res);
         e->cpsr.n = n; e->cpsr.z = z; e->cpsr.c = c; e->cpsr.v = v;
 
@@ -537,10 +605,10 @@ static inline bool emulate_thumb(emu *e) {
             u32 op1 = r(e, rm);
             u32 op2 = r(e, rd);
             u32 res = op2 - op1;
-            e->cpsr.n = res >> 31 & 0b1;
+            e->cpsr.n = is_negative(res);
             e->cpsr.z = res == 0;
             e->cpsr.c = !(op1 > op2);
-            e->cpsr.n = is_overflow((s64) op2 - (s64) op1);
+            e->cpsr.v = is_overflow_sub(op1, op2, res);
             break;
         }
         case THOP_MOV:
@@ -550,11 +618,11 @@ static inline bool emulate_thumb(emu *e) {
             u32 addr = r(e, rm);
             bool thumb = addr & 0b1;
             if (thumb) {
-                e->instruction_set = INS_THUMB;
+                e->cpsr.t = 1;
                 addr &= 0b11111111111111111111111111111110;
                 sr(e, PC, addr + 2);
             } else {
-                e->instruction_set = INS_ARM;
+                e->cpsr.t = 0;
                 addr &= 0b11111111111111111111111111111100;
                 sr(e, PC, addr + 4);
             }
@@ -567,17 +635,17 @@ static inline bool emulate_thumb(emu *e) {
         u32 op1 = isimm ? ins >> 6 & 0b111 : r(e, t_rm(ins));
         u32 op2 = r(e, t_rn(ins));
         u32 res = sub ? op2 - op1 : op2 + op1;
-        e->cpsr.n = res >> 31 & 0b1;
+        e->cpsr.n = is_negative(res);
         e->cpsr.z = res == 0;
         e->cpsr.c = sub ? !(op1 > op2) : is_carry((u64) op2 + (u64) op1);
-        e->cpsr.v = sub ? is_overflow((s64) op2 - (s64) op1) : is_overflow((s64) op2 + (s64) op1);
+        e->cpsr.v = sub? is_overflow_sub(op1, op2, res) : is_overflow_add(op1, op2, res);
         sr(e, t_rd(ins), res);
     } else if (a_disc5(ins) == 0b11100) {
         // unconditional branch
         u32 uoff = ins & 0b11111111111;
         uoff <<= 1;
         uoff = (((s32) uoff) << 20) >> 20;
-        sr(e, PC, pc + 2 + uoff);
+        sr(e, PC, r(e, PC) + 2 + uoff);
     } else if (a_disc5(ins) == 0b11101) {
         // undefined instruction
         debug("undefined instruction");
@@ -591,7 +659,7 @@ static inline bool emulate_thumb(emu *e) {
         reg rd = ins >> 8 & 0b111;
         u32 off = ins & 0xff;
         off *= 4;
-        u32 addr = pc + 2 + off;
+        u32 addr = r(e, PC) + 2 + off;
         sr(e, rd, mem_read32(e, addr));
     } else if (a_disc4(ins) == 0b0101 && flag(ins, 9) == 0) {
         // load/store word or byte register
@@ -666,7 +734,7 @@ static inline bool emulate_thumb(emu *e) {
             u32 uoff = ins & 0xff;
             uoff <<= 1;
             uoff = (((s32) uoff) << 23) >> 23;
-            sr(e, PC, pc + 2 + uoff);
+            sr(e, PC, r(e, PC) + 2 + uoff);
         }
     } else if (a_disc3(ins) == 0b000) {
         // shift by immediate
@@ -677,26 +745,30 @@ static inline bool emulate_thumb(emu *e) {
         u32 op1 = ins & 0xff;
         u32 op2 = ins >> 8 & 0b111;
         u32 res = sub ? op2 - op1 : op2 + op1;
-        e->cpsr.n = res >> 31 & 0b1;
+        e->cpsr.n = is_negative(res);
         e->cpsr.z = res == 0;
         e->cpsr.c = sub ? !(op1 > op2) : is_carry((u64) op2 + (u64) op1);
-        e->cpsr.v = sub ? is_overflow((s64) op2 - (s64) op1) : is_overflow((s64) op2 + (s64) op1);
+        e->cpsr.v = sub? is_overflow_sub(op1, op2, res) : is_overflow_add(op1, op2, res);
         if (write) sr(e, t_rd(ins), res);
     } else if (a_disc3(ins) == 0b011) {
         // load/store word or byte immediate
         u32 off = ins >> 6 & 0b11111;
         t_loadstore(e, ins, off, flag(ins, 12));
     }
+    sr(e, PC, r(e, PC) + 2);
     return true;
+}
+static inline bool emulate_thumb(emu *e) {
+    u32 pc = r(e, PC);
+    u16 ins = mem_read32(e, pc - 2);
+    return emulate_thumb_ins(e, ins);
 }
 
 void emulate(emu *e, u32 fuel) {
     bool running = true;
     while (running && fuel > 0) {
         fuel -= 1;
-        switch (e->instruction_set) {
-        case INS_ARM: running = emulate_arm(e); break;
-        case INS_THUMB: running = emulate_thumb(e); break;
-        }
+        if (e->cpsr.t) emulate_thumb(e);
+        else emulate_arm(e);
     }
 }

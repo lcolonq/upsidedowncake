@@ -3,7 +3,7 @@ OBJECTS = $(SRCS:src/%.c=build/%.o)
 
 CHK_SOURCES ?= $(SRCS)
 CFLAGS ?= -Wall -Wextra -Wpedantic --std=c23 -g -fPIC -Ideps/ -Isrc/
-LDFLAGS ?= -shared
+LDFLAGS ?= -lcapstone -shared
 
 .PHONY: all clean test check-syntax
 
@@ -26,7 +26,7 @@ clean:
 	rm -r build/
 
 test: udc_gba_emu.so
-	emacs --batch --load=$< '--eval=(print (u/gba/c-emulate (vector 1 2 3 4)))'
+	emacs --script test.el
 
 TAGS: $(SRCS)
 	etags $^
