@@ -2,7 +2,7 @@ SRCS = src/main.c src/utils.c src/arm.c
 OBJECTS = $(SRCS:src/%.c=build/%.o)
 
 CHK_SOURCES ?= $(SRCS)
-CFLAGS ?= -Wall -Wextra -Wpedantic --std=c23 -g -fPIC -Ideps/ -Isrc/
+CFLAGS ?= -Wall -Wextra -Wpedantic -ftrapv --std=c23 -g -fPIC -Ideps/ -Isrc/
 LDFLAGS ?= -lcapstone -shared
 
 .PHONY: all clean test check-syntax

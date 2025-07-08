@@ -16,8 +16,6 @@
 
 (load-file "shim.so")
 
-(defvar test/cases-data-proc-immediate (json-parse-string (f-read-text "~/src/singlesteptests/ARM7TDMI/v1/arm_data_proc_immediate.json")))
-
 (defconst test/syms (u/gba/make-symtab :alignment 4))
 (u/gba/symtab-add-section! test/syms :start u/gba/rom-start)
 (u/gba/toplevel test/syms :start :main 'arm
@@ -133,10 +131,22 @@
       (test/compare-state (format "%s (%s)" disasm (test/to-binary opcode)) state final)
       (error (error "%s\nInitial: %s\nActual:  %s\nExpect:  %s" (cadr err) initstr (test/pretty-state state) expectstr)))
     (message "%s passed" (s-pad-right 40 " " disasm))))
-(seq-each
-  (lambda (c)
-    (test/case c))
-  test/cases-data-proc-immediate)
+(defun test/cases (cs)
+  "Test all of CS."
+  (seq-each
+    (lambda (c)
+      (test/case c))
+    cs))
+(defconst test/files
+  '(
+     ;; "arm_data_proc_immediate"
+     ;; "arm_data_proc_immediate_shift"
+     ;; "arm_data_proc_register_shift"
+     "arm_mul_mla"
+     ))
+(--each test/files
+  (message "Testing file: %s" it)
+  (test/cases (json-parse-string (f-read-text (format "~/src/singlesteptests/ARM7TDMI/v1/%s.json" it)))))
 (message "All tests passed!")
 
 (provide 'test)

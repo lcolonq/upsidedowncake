@@ -8,6 +8,7 @@
 
 #include "arm.h"
 #include "utils.h"
+#include "mulcarry.h"
 
 // building structs
 cpsr make_cpsr(u32 x) {
@@ -83,6 +84,14 @@ static inline void mem_write32(emu *e, u32 addr, u32 val) {
 }
 
 // utilities for implementing instructions
+static inline bool is_negative(u32 x) { return x >> 31 & 0b1; }
+static inline bool is_carry(u64 res) { return res > 0xffffffffll; }
+static inline bool is_overflow_add(u32 op1, u32 op2, u32 res) {
+    return is_negative(op1) == is_negative(op2) && is_negative(op1) != is_negative(res);
+}
+static inline bool is_overflow_sub(u32 op1, u32 op2, u32 res) {
+    return is_negative(op1) != is_negative(op2) && is_negative(op1) != is_negative(res);
+}
 static inline u32 *reg_loc(emu *e, reg r) {
     switch (e->cpsr.mode) {
     case MODE_FIQ: return r >= R8 && r <= R14 ? &e->reg_fiq[r - R8] : &e->reg[r];
@@ -115,51 +124,70 @@ static bool cond_satisfied(emu *e, cond c) {
     default: return false;
     }
 }
+
+void drifloon() {}
 static bool shift_apply(emu *e, u32 ins, u32 sh, u32 *v, bool imm) {
     shift shift_type = ins >> 5 & 0b11;
     u32 w = *v;
+    debug("shift_apply: v = 0x%08x, ty = %d, sh = %d", *v, shift_type, sh);
     switch (shift_type) {
     case SHIFT_LSL:
-        *v <<= sh;
-        return
-            sh == 0 ? e->cpsr.c
-            : sh > 32 ? 0
-            : w >> (32 - sh) & 0b1;
+        if (sh == 0) {
+            return e->cpsr.c;
+        } else if (sh < 32) {
+            *v <<= sh;
+            return w >> (32 - sh) & 0b1;
+        } else if (sh == 32) {
+            *v = 0;
+            return w & 0b1;
+        } else {
+            *v = 0;
+            return 0;
+        }
     case SHIFT_LSR:
-        if (imm && sh == 0) sh = 32;
-        *v >>= sh;
-        return
-            sh == 0 ? e->cpsr.c
-            : sh > 32 ? 0
-            : w >> (sh - 1) & 0b1;
+        if ((imm && sh == 0) || sh == 32) {
+            *v = 0;
+            return is_negative(w);
+        } else if (sh == 0) {
+            return e->cpsr.c;
+        } else if (sh > 32) {
+            *v = 0;
+            return 0;
+        } else {
+            *v >>= sh;
+            return w >> (sh - 1) & 0b1;
+        }
     case SHIFT_ASR:
-        if (imm && sh == 0) sh = 32;
-        *v = ((s32) w) >> sh;
-        return
-            sh == 0 ? e->cpsr.c
-            : sh >= 32 ? w >> 31 & 0b1
-            : w >> (sh - 1) & 0b1;
+        if (imm && sh == 0) {
+            *v = is_negative(*v) ? 0xffffffff : 0x00000000;
+            return is_negative(w);
+        } else if (sh == 0) {
+            return e->cpsr.c;
+        } else if (sh < 32) {
+            *v = ((s32) w) >> sh;
+            return w >> (sh - 1) & 0b1;
+        } else {
+            *v = is_negative(*v) ? 0xffffffff : 0x00000000;
+            return is_negative(w);
+        }
     case SHIFT_ROR:
         if (imm && sh == 0) { // rrx
             *v = (w >> 1 | e->cpsr.c << 31);
             return w & 0b1;
+        } else if (sh == 0) {
+            return e->cpsr.c;
         } else {
-            *v = ror(w, sh);
-            return
-                sh == 0 ? e->cpsr.c
-                : sh == 32 ? w >> 31 & 0b1
-                : w >> (sh - 1) & 0b1;
+            sh &= 0b11111;
+            if (sh == 0) {
+                return is_negative(w);
+            } else {
+                *v = ror(w, sh);
+                debug("ROR: w = 0x%08x, sh = %d, v = 0x%08x", w, sh, *v);
+                return w >> (sh - 1) & 0b1;
+            }
         }
     }
     return false;
-}
-static inline bool is_negative(u32 x) { return x >> 31 & 0b1; }
-static inline bool is_carry(u64 res) { return res > 0xffffffffll; }
-static inline bool is_overflow_add(u32 op1, u32 op2, u32 res) {
-    return is_negative(op1) == is_negative(op2) && is_negative(op1) != is_negative(res);
-}
-static inline bool is_overflow_sub(u32 op1, u32 op2, u32 res) {
-    return is_negative(op1) != is_negative(op2) && is_negative(op1) != is_negative(res);
 }
 
 // instruction decoding helpers
@@ -198,12 +226,12 @@ static inline void a_dataprocessing(emu *e, u32 ins, u32 op2, u32 shiftc, bool r
         break;
     case DPOP_SUB: case DPOP_CMP:
         res = op1 - op2;
-        c = !(op2 > op1);
+        c = !is_carry((u64) op1 - (u64) op2);
         v = is_overflow_sub(op1, op2, res);
         break;
     case DPOP_RSB:
         res = op2 - op1;
-        c = !(op1 > op2);
+        c = !is_carry((u64) op2 - (u64) op1);
         v = is_overflow_sub(op2, op1, res);
         break;
     case DPOP_ADD: case DPOP_CMN:
@@ -218,12 +246,12 @@ static inline void a_dataprocessing(emu *e, u32 ins, u32 op2, u32 shiftc, bool r
         break;
     case DPOP_SBC:
         res = op1 - op2 + e->cpsr.c - 1;
-        c = !(op2 + 1 > op1 + e->cpsr.c);
+        c = !is_carry((u64) op1 - (u64) op2 + (u64) e->cpsr.c - (u64) 1);
         v = is_overflow_sub(op1, op2, res);
         break;
     case DPOP_RSC:
         res = op2 - op1 + e->cpsr.c - 1;
-        c = !(op1 + 1 > op2 + e->cpsr.c);
+        c = !is_carry((u64) op2 - (u64) op1 + (u64) e->cpsr.c - (u64) 1);
         v = is_overflow_sub(op2, op1, res);
         break;
     case DPOP_ORR:
@@ -236,6 +264,7 @@ static inline void a_dataprocessing(emu *e, u32 ins, u32 op2, u32 shiftc, bool r
         break;
     case DPOP_BIC:
         res = op1 & ~op2;
+        debug("bic: op1 = 0x%08x, op2 = 0x%08x, res = 0x%08x");
         c = shiftc;
         break;
     case DPOP_MVN:
@@ -334,14 +363,17 @@ bool emulate_arm_ins(emu *e, u32 ins) {
         bool s = flag(ins, 20);
         // note that rn and rd are swapped for multiply
         reg rd = a_rn(ins);
-        u32 add = r(e, a_rd(ins));
-        u32 f1 = r(e, a_rs(ins));
-        u32 f2 = r(e, a_rm(ins));
-        u32 res = f1 * f2 + a ? add : 0;
+        reg r0 = a_rd(ins); u32 add = r(e, r0); if (r0 == PC) add += 4;
+        reg r1 = a_rs(ins); u32 f1 = r(e, r1); if (r1 == PC) f1 += 4;
+        reg r2 = a_rm(ins); u32 f2 = r(e, r2); if (r2 == PC) f2 += 4;
+        u32 res = f1 * f2 + (a ? add : 0);
+        debug("mul: res = 0x%08x, f1 = 0x%08x, f2 = 0x%08x, add = 0x%08x", res, f1, f2, add);
         sr(e, rd, res);
+        if (rd == PC) e->branched = true;
         if (s) {
             e->cpsr.z = res == 0;
             e->cpsr.n = is_negative(res);
+            e->cpsr.c = TickMultiply(f1, true) ? MultiplyCarrySimple(f1) : MultiplyCarryLo(f2, f1, add);
         }
     } else if (a_disc5(ins) == 0b00001 && a_immhi(ins) == 0b1001) {
         panic("multiply long");
@@ -400,13 +432,14 @@ bool emulate_arm_ins(emu *e, u32 ins) {
         // data processing, op2 is register shifted by immediate
         reg reg = a_rm(ins);
         u32 v = r(e, reg);
-        if (reg == PC) v += 4; // weird quirk with PC - it's 12 ahead instead of 8 in this case
-        a_dataprocessing(e, ins, v, shift_apply(e, ins, ins >> 7 & 0b1111, &v, true), true);
+        a_dataprocessing(e, ins, v, shift_apply(e, ins, ins >> 7 & 0b11111, &v, true), false);
     } else if (a_disc3(ins) == 0b000 && flag(ins, 4) == 1) {
         // data processing, op2 is register shifted by register
-        u32 v = r(e, a_rm(ins));
-        u32 sh = r(e, a_rs(ins));
-        a_dataprocessing(e, ins, v, shift_apply(e, ins, sh, &v, false), false);
+        reg rm = a_rm(ins);
+        u32 v = r(e, rm);
+        if (rm == PC) v += 4; // PC reads as 4 higher if we're shifting a register
+        u32 sh = r(e, a_rs(ins)) & 0xff;
+        a_dataprocessing(e, ins, v, shift_apply(e, ins, sh, &v, false), true);
     } else if (a_disc3(ins) == 0b010) {
         // load/store, offset in immediate
         u32 imm = ins && 0xfff;
