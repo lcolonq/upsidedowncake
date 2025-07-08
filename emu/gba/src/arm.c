@@ -129,7 +129,6 @@ void drifloon() {}
 static bool shift_apply(emu *e, u32 ins, u32 sh, u32 *v, bool imm) {
     shift shift_type = ins >> 5 & 0b11;
     u32 w = *v;
-    debug("shift_apply: v = 0x%08x, ty = %d, sh = %d", *v, shift_type, sh);
     switch (shift_type) {
     case SHIFT_LSL:
         if (sh == 0) {
@@ -182,7 +181,6 @@ static bool shift_apply(emu *e, u32 ins, u32 sh, u32 *v, bool imm) {
                 return is_negative(w);
             } else {
                 *v = ror(w, sh);
-                debug("ROR: w = 0x%08x, sh = %d, v = 0x%08x", w, sh, *v);
                 return w >> (sh - 1) & 0b1;
             }
         }
@@ -264,7 +262,6 @@ static inline void a_dataprocessing(emu *e, u32 ins, u32 op2, u32 shiftc, bool r
         break;
     case DPOP_BIC:
         res = op1 & ~op2;
-        debug("bic: op1 = 0x%08x, op2 = 0x%08x, res = 0x%08x");
         c = shiftc;
         break;
     case DPOP_MVN:
@@ -364,16 +361,16 @@ bool emulate_arm_ins(emu *e, u32 ins) {
         // note that rn and rd are swapped for multiply
         reg rd = a_rn(ins);
         reg r0 = a_rd(ins); u32 add = r(e, r0); if (r0 == PC) add += 4;
+        add = a ? add : 0;
         reg r1 = a_rs(ins); u32 f1 = r(e, r1); if (r1 == PC) f1 += 4;
         reg r2 = a_rm(ins); u32 f2 = r(e, r2); if (r2 == PC) f2 += 4;
-        u32 res = f1 * f2 + (a ? add : 0);
-        debug("mul: res = 0x%08x, f1 = 0x%08x, f2 = 0x%08x, add = 0x%08x", res, f1, f2, add);
+        u32 res = f1 * f2 + add;
         sr(e, rd, res);
         if (rd == PC) e->branched = true;
         if (s) {
             e->cpsr.z = res == 0;
             e->cpsr.n = is_negative(res);
-            e->cpsr.c = TickMultiply(f1, true) ? MultiplyCarrySimple(f1) : MultiplyCarryLo(f2, f1, add);
+            e->cpsr.c = tick_multiply(f1, true) ? multiply_carry_simple(f1) : multiply_carry_lo(f2, f1, add);
         }
     } else if (a_disc5(ins) == 0b00001 && a_immhi(ins) == 0b1001) {
         panic("multiply long");
