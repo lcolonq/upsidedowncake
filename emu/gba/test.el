@@ -27,6 +27,15 @@
   '(b ne :loop))
 (defconst test/program (u/gba/link test/syms u/gba/rom-start))
 
+(defun test/build-loads (ts)
+  "Construct a vector of load vector from TS."
+  (seq-mapcat
+    (lambda (t)
+      (-let [(&hash "kind" "size" "addr" "data") t]
+        (when (= kind 1)
+          (list (vector addr data size)))))
+    ts
+    'vector))
 (defun test/build-state (opcode initial)
   "Construct an initial emulator test state from OPCODE and INITIAL."
   (-let* ( ((&hash "R" "R_fiq" "R_irq" "R_svc" "R_abt" "R_und" "CPSR" "SPSR") initial)
@@ -122,15 +131,22 @@
 
 (defun test/case (c)
   "Test the emulator on C."
-  (-let* ( ((&hash "initial" "final" "opcode") c)
+  (-let* ( ((&hash "initial" "final" "opcode" "transactions") c)
            (state (test/build-state opcode initial))
            (initstr (test/pretty-state state))
            (expectstr (test/pretty-state (test/build-state opcode final)))
-           (disasm (u/gba/c-emulate-test-arm state)))
+           (loads (test/build-loads transactions))
+           ((disasm . trans) (u/gba/c-emulate-test-arm state loads)))
     (condition-case err
       (test/compare-state (format "%s (%s)" disasm (test/to-binary opcode)) state final)
-      (error (error "%s\nInitial: %s\nActual:  %s\nExpect:  %s" (cadr err) initstr (test/pretty-state state) expectstr)))
-    (message "%s passed" (s-pad-right 40 " " disasm))))
+      (error
+        (error
+          "%s\nInitial: %s\nActual:  %s\nExpect:  %s\n\nExpected Transactions: %s\n"
+          (cadr err) initstr (test/pretty-state state) expectstr
+          transactions
+          )))
+    (message "%s passed" (s-pad-right 40 " " disasm))
+    ))
 (defun test/cases (cs)
   "Test all of CS."
   (seq-each
@@ -142,7 +158,15 @@
      ;; "arm_data_proc_immediate"
      ;; "arm_data_proc_immediate_shift"
      ;; "arm_data_proc_register_shift"
-     "arm_mul_mla"
+     ;; "arm_mul_mla"
+     ;; "arm_bx"
+     ;; "arm_b_bl"
+     ;; "arm_ldr_str_immediate_offset"
+     ;; "arm_ldr_str_register_offset"
+     "arm_ldrh_strh"
+     ;; "arm_ldrsb_strsh"
+     ;; "arm_ldm_stm"
+     ;; "arm_swp"
      ))
 (--each test/files
   (message "Testing file: %s" it)

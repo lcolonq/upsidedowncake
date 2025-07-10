@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stddef.h>
 
 typedef uint8_t u8;
 typedef uint16_t u16;
@@ -84,6 +85,27 @@ typedef struct mem {
     u8 rom[32 * 1024 * 1024];
 } mem;
 
+typedef struct transaction {
+    enum { TRANS_INSREAD = 0, TRANS_READ, TRANS_WRITE } kind;
+    u32 addr;
+    u32 size;
+    u32 val;
+} transaction;
+
+typedef struct load {
+    bool valid;
+    u32 addr;
+    u32 data;
+    u32 size;
+} load;
+
+typedef struct trans {
+    bool record;
+    ptrdiff_t idx;
+    transaction data[8];
+    load loads[8];
+} trans;
+
 typedef struct emu {
     u32 reg[REG_COUNT];
     u32 reg_fiq[7], reg_irq[2], reg_svc[2], reg_abt[2], reg_und[2];
@@ -91,6 +113,7 @@ typedef struct emu {
     cpsr spsr_fiq, spsr_irq, spsr_svc, spsr_abt, spsr_und;
     mem mem;
     bool branched;
+    trans trans;
 } emu;
 
 cpsr make_cpsr(u32 x);

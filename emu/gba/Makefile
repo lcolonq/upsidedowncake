@@ -3,7 +3,7 @@ OBJECTS = $(SRCS:src/%.c=build/%.o)
 
 CHK_SOURCES ?= $(SRCS)
 CFLAGS ?= -Wall -Wextra -Wpedantic -ftrapv --std=c23 -g -fPIC -Ideps/ -Isrc/
-LDFLAGS ?= -lcapstone -shared
+LDFLAGS ?= -lcapstone -shared -g
 
 .PHONY: all clean test check-syntax
 

@@ -72,12 +72,36 @@ error:
     return env->intern(env, "nil");
 }
 
+emacs_value transaction_to_vector(emacs_env *env, transaction *t) {
+    emacs_value new = env->intern(env, "vector");
+    env->funcall(env, new, 4, (emacs_value[]) {
+        env->make_integer(env, t->kind),
+        env->make_integer(env, t->addr),
+        env->make_integer(env, t->size),
+        env->make_integer(env, t->val),
+    });
+    return new;
+}
+
+emacs_value transactions_list(emacs_env *env) {
+    emacs_value ret = env->intern(env, "nil");
+    for (ptrdiff_t i = 0; i < EMU.trans.idx; ++i) {
+        ret = env->funcall(env, env->intern(env, "cons"), 2, (emacs_value[]) {
+            transaction_to_vector(env, &EMU.trans.data[i]),
+            ret,
+        });
+    }
+    return env->funcall(env, env->intern(env, "reverse"), 1, (emacs_value[]) { ret });
+}
+
 emacs_value c_emulate_test_arm(emacs_env *env, ptrdiff_t nargs, emacs_value args[], void *) {
     ENV = env;
+    EMU.trans.record = true;
+    EMU.trans.idx = 0;
     EMU.reg[PC] = 0x08000000 + 4;
 
-    if (nargs != 1) {
-        panic("expected 1 arguments, got %d", nargs);
+    if (nargs != 2) {
+        panic("expected 2 arguments, got %d", nargs);
         goto error;
     }
     emacs_value argvec = args[0];
@@ -129,6 +153,19 @@ emacs_value c_emulate_test_arm(emacs_env *env, ptrdiff_t nargs, emacs_value args
     EMU.spsr_abt = make_cpsr(env->extract_integer(env, env->vec_get(env, spsrs, 3)));
     EMU.spsr_und = make_cpsr(env->extract_integer(env, env->vec_get(env, spsrs, 4)));
 
+    emacs_value loads = args[1];
+    for (ptrdiff_t i = 0; i < 8; ++i) {
+        if (i < env->vec_size(env, loads)) {
+            emacs_value elem = env->vec_get(env, loads, i);
+            EMU.trans.loads[i].valid = true;
+            EMU.trans.loads[i].addr = env->extract_integer(env, env->vec_get(env, elem, 0));
+            EMU.trans.loads[i].data = env->extract_integer(env, env->vec_get(env, elem, 1));
+            EMU.trans.loads[i].size = env->extract_integer(env, env->vec_get(env, elem, 2));
+        } else {
+            EMU.trans.loads[i].valid = false;
+        }
+    }
+
     u32 insbytes = env->extract_integer(env, ins);
     emulate_arm_ins(&EMU, insbytes);
 
@@ -145,7 +182,11 @@ emacs_value c_emulate_test_arm(emacs_env *env, ptrdiff_t nargs, emacs_value args
     env->vec_set(env, spsrs, 3, env->make_integer(env, cpsr_to_u32(EMU.spsr_abt)));
     env->vec_set(env, spsrs, 4, env->make_integer(env, cpsr_to_u32(EMU.spsr_und)));
 
-    return disassemble(env, (u8 *) &insbytes);
+    return
+        env->funcall(env, env->intern(env, "cons"), 2, (emacs_value[]) {
+            disassemble(env, (u8 *) &insbytes),
+            transactions_list(env),
+        });
 error:
     return env->intern(env, "nil");
 }
@@ -156,6 +197,6 @@ int emacs_module_init(struct emacs_runtime *runtime) {
 	if (env->size < (long int) sizeof(*env)) return 2;
     ENV = env;
     defun(env, "u/gba/c-emulate", "Emulate the given vector of bytes.", 2, c_emulate);
-    defun(env, "u/gba/c-emulate-test-arm", "Emulate one instruction from the given state.", 1, c_emulate_test_arm);
+    defun(env, "u/gba/c-emulate-test-arm", "Emulate one instruction from the given state.", 2, c_emulate_test_arm);
     return 0;
 }
