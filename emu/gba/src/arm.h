@@ -89,7 +89,7 @@ typedef struct transaction {
     enum { TRANS_INSREAD = 0, TRANS_READ, TRANS_WRITE } kind;
     u32 addr;
     u32 size;
-    u32 val;
+    u32 data;
 } transaction;
 
 typedef struct load {
@@ -99,11 +99,12 @@ typedef struct load {
     u32 size;
 } load;
 
+#define TRANS_MAX 32
 typedef struct trans {
     bool record;
     ptrdiff_t idx;
-    transaction data[8];
-    load loads[8];
+    transaction data[TRANS_MAX];
+    load loads[TRANS_MAX];
 } trans;
 
 typedef struct emu {

@@ -24,7 +24,7 @@ emacs_value disassemble(emacs_env *env, u8 *code) {
     }
     size_t count = cs_disasm(handle, code, 4, 0, 0, &insn);
     if (count < 1) {
-        panic("failed to disassemble");
+        // panic("failed to disassemble");
         return env->intern(env, "nil");
     }
     char buf[256];
@@ -74,13 +74,12 @@ error:
 
 emacs_value transaction_to_vector(emacs_env *env, transaction *t) {
     emacs_value new = env->intern(env, "vector");
-    env->funcall(env, new, 4, (emacs_value[]) {
+    return env->funcall(env, new, 4, (emacs_value[]) {
         env->make_integer(env, t->kind),
         env->make_integer(env, t->addr),
         env->make_integer(env, t->size),
-        env->make_integer(env, t->val),
+        env->make_integer(env, t->data),
     });
-    return new;
 }
 
 emacs_value transactions_list(emacs_env *env) {
@@ -154,7 +153,7 @@ emacs_value c_emulate_test_arm(emacs_env *env, ptrdiff_t nargs, emacs_value args
     EMU.spsr_und = make_cpsr(env->extract_integer(env, env->vec_get(env, spsrs, 4)));
 
     emacs_value loads = args[1];
-    for (ptrdiff_t i = 0; i < 8; ++i) {
+    for (ptrdiff_t i = 0; i < TRANS_MAX; ++i) {
         if (i < env->vec_size(env, loads)) {
             emacs_value elem = env->vec_get(env, loads, i);
             EMU.trans.loads[i].valid = true;

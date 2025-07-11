@@ -10,32 +10,20 @@
 #include "utils.h"
 #include "mulcarry.h"
 
-// building structs
+// conversions
 cpsr make_cpsr(u32 x) {
     cpsr ret;
-    ret.n = x >> 31 & 0b1;
-    ret.z = x >> 30 & 0b1;
-    ret.c = x >> 29 & 0b1;
-    ret.v = x >> 28 & 0b1;
+    ret.n = x >> 31 & 0b1; ret.z = x >> 30 & 0b1; ret.c = x >> 29 & 0b1; ret.v = x >> 28 & 0b1;
     ret.dnm = x >> 8 & 0b11111111111111111111;
-    ret.i = x >> 7 & 0b1;
-    ret.f = x >> 6 & 0b1;
-    ret.t = x >> 5 & 0b1;
+    ret.i = x >> 7 & 0b1; ret.f = x >> 6 & 0b1; ret.t = x >> 5 & 0b1;
     ret.mode = x & 0b11111;
     return ret;
 }
 u32 cpsr_to_u32(cpsr x) {
-    return
-        ((x.n & 0b1) << 31)
-        | ((x.z & 0b1) << 30)
-        | ((x.c & 0b1) << 29)
-        | ((x.v & 0b1) << 28)
+    return ((x.n & 0b1) << 31) | ((x.z & 0b1) << 30) | ((x.c & 0b1) << 29) | ((x.v & 0b1) << 28)
         | ((x.dnm & 0xfffff) << 8)
-        | ((x.i & 0b1) << 7)
-        | ((x.f & 0b1) << 6)
-        | ((x.t & 0b1) << 5)
-        | (x.mode & 0b11111)
-        ;
+        | ((x.i & 0b1) << 7) | ((x.f & 0b1) << 6) | ((x.t & 0b1) << 5)
+        | (x.mode & 0b11111);
 }
 
 // utilities for implementing instructions
@@ -68,7 +56,11 @@ static inline u32 ror(u32 v, u32 rot) {
     return v >> rot | v << (32 - rot);
 }
 static inline bool flag(u32 ins, u32 idx) { return ins >> idx & 0b1; }
-static inline u32 sext(u8 x) { return (u32) (s32) (s8) x; }
+static inline u32 sext8(u8 x) {
+    debug("sext8: 0x%08x", x);
+    return (u32) (s32) (s8) x;
+}
+static inline u32 sext16(u16 x) { return (u32) (s32) (s16) x; }
 static bool cond_satisfied(emu *e, cond c) {
     switch (c) {
     case COND_EQ: return e->cpsr.z; case COND_NE: return !e->cpsr.z;
@@ -84,8 +76,149 @@ static bool cond_satisfied(emu *e, cond c) {
     }
 }
 
-static bool shift_apply(emu *e, u32 ins, u32 sh, u32 *v, bool imm) {
-    shift shift_type = ins >> 5 & 0b11;
+// memory access
+static inline void mem_record_transaction(emu *e, transaction t) {
+    if (!e->trans.record) return;
+    if (e->trans.idx >= TRANS_MAX) {
+        panic("too many transactions");
+    } else {
+        debug("transaction %d: addr = 0x%08x, val = 0x%08x", e->trans.idx, t.addr, t.data);
+        e->trans.data[e->trans.idx] = t;
+        e->trans.idx++;
+    }
+}
+static inline u32 mem_lookup_load(emu *e, u32 size, u32 addr) {
+    for (ptrdiff_t i = 0; i < TRANS_MAX; ++i) {
+        debug("valid = %d, size = %d, addr = 0x%08x", e->trans.loads[i].valid, e->trans.loads[i].size, e->trans.loads[i].addr);
+        if (e->trans.loads[i].valid
+            && e->trans.loads[i].size == size
+            && e->trans.loads[i].addr == addr) {
+            debug("found; data = 0x%08x", e->trans.loads[i].data);
+            return e->trans.loads[i].data;
+        }
+    }
+    return 0xbeefbabe;
+}
+u8 *mem_loc(emu *e, u32 addr) {
+    if (addr >= 0x02000000 && addr <= 0x0203FFFF) {
+        return &e->mem.ewram[addr - 0x02000000];
+    } else if (addr >= 0x03000000 && addr <= 0x03007FFF) {
+        return &e->mem.iwram[addr - 0x03000000];
+    } else if (addr >= 0x08000000 && addr <= 0x09FFFFFF) {
+        return &e->mem.rom[addr - 0x08000000];
+    }
+    return NULL;
+}
+static inline u32 mem_read_byte(emu *e, u32 addr) {
+    u8 *loc = mem_loc(e, addr);
+    if (loc) return *loc;
+    else {
+        // panic("invalid read address: 0x%08xu", addr);
+        return 0xee;
+    }
+}
+static inline u32 mem_read8(emu *e, u32 addr) {
+    if (e->trans.record) return mem_lookup_load(e, 1, addr);
+    u32 res = mem_read_byte(e, addr);
+    mem_record_transaction(e, (transaction){
+        .kind = TRANS_READ,
+        .size = 1,
+        .addr = addr,
+        .data = res,
+    });
+    return res;
+}
+static inline u32 mem_read16(emu *e, u32 addr) {
+    u32 misalign = addr & 0b1; // align word operations, and rotate misaligned loads
+    u32 rot = misalign << 3; // misalign represents the misalignment in bytes - convert to bits
+    if (e->trans.record) {
+        u32 x = mem_lookup_load(e, 2, addr);
+        debug("x: 0x%08x, rot: %d, res: 0x%08x", x, rot, ror(x, rot));
+        return ror(x, rot);
+    }
+    addr &= 0b11111111111111111111111111111110;
+    u32 res = mem_read_byte(e, addr)
+        | mem_read_byte(e, addr + 1) << 8;
+    mem_record_transaction(e, (transaction){
+        .kind = TRANS_READ,
+        .size = 2,
+        .addr = addr,
+        .data = res,
+    });
+    return ror(res, rot);
+}
+static inline u32 mem_read32(emu *e, u32 addr) {
+    u32 misalign = addr & 0b11; // align word operations, and rotate misaligned loads
+    u32 rot = misalign << 3; // misalign represents the misalignment in bytes - convert to bits
+    if (e->trans.record) return ror(mem_lookup_load(e, 4, addr), rot);
+    addr &= 0b11111111111111111111111111111100;
+    u32 res = mem_read_byte(e, addr)
+        | mem_read_byte(e, addr + 1) << 8
+        | mem_read_byte(e, addr + 2) << 16
+        | mem_read_byte(e, addr + 3) << 24;
+    mem_record_transaction(e, (transaction){
+        .kind = TRANS_READ,
+        .size = 4,
+        .addr = addr,
+        .data = res,
+    });
+    return ror(res, rot);
+}
+static inline void mem_write_byte(emu *e, u32 addr, u8 val) {
+    u8 *loc = mem_loc(e, addr);
+    if (loc) *loc = val;
+    // else panic("invalid write address: 0x%08xu", addr);
+}
+static inline void mem_write8(emu *e, u32 addr, u8 val) {
+    mem_record_transaction(e, (transaction){
+        .kind = TRANS_WRITE,
+        .size = 1,
+        .addr = addr,
+        .data = val,
+    });
+    mem_write_byte(e, addr, val);
+}
+static inline void mem_write16(emu *e, u32 addr, u16 val) {
+    mem_record_transaction(e, (transaction){
+        .kind = TRANS_WRITE,
+        .size = 2,
+        .addr = addr,
+        .data = val,
+    });
+    mem_write_byte(e, addr, val & 0xff);
+    mem_write_byte(e, addr + 1, val >> 8 & 0xff);
+}
+static inline void mem_write32(emu *e, u32 addr, u32 val) {
+    mem_record_transaction(e, (transaction){
+        .kind = TRANS_WRITE,
+        .size = 4,
+        .addr = addr,
+        .data = val,
+    });
+    mem_write_byte(e, addr, val & 0xff);
+    mem_write_byte(e, addr + 1, val >> 8 & 0xff);
+    mem_write_byte(e, addr + 2, val >> 16 & 0xff);
+    mem_write_byte(e, addr + 3, val >> 24 & 0xff);
+}
+
+// instruction decoding helpers
+static inline cond a_cond(u32 ins) { return ins >> 28 & 0xf; }
+static inline dpop a_op(u32 ins) { return ins >> 21 & 0xf; }
+static inline reg a_rn(u32 ins) { return ins >> 16 & 0xf; }
+static inline reg a_rd(u32 ins) { return ins >> 12 & 0xf; }
+static inline reg a_rs(u32 ins) { return ins >> 8 & 0xf; }
+static inline reg a_rm(u32 ins) { return ins & 0xf; }
+static inline u32 a_disc3(u32 ins) { return ins >> 25 & 0b111; }
+static inline u32 a_disc4(u32 ins) { return ins >> 24 & 0b1111; }
+static inline u32 a_disc5(u32 ins) { return ins >> 23 & 0b11111; }
+static inline u32 a_disc6(u32 ins) { return ins >> 22 & 0b111111; }
+static inline u32 a_disc8(u32 ins) { return ins >> 20 & 0xff; }
+static inline u32 a_disclo(u32 ins) { return ins >> 20 & 0b11; }
+static inline u32 a_discmrs(u32 ins) { return ins & 0xfff; }
+static inline u32 a_immhi(u32 ins) { return ins >> 4 & 0xf; }
+
+// emulation
+static bool shifter(emu *e, shift shift_type, u32 sh, u32 *v, bool imm) {
     u32 w = *v;
     switch (shift_type) {
     case SHIFT_LSL:
@@ -128,7 +261,6 @@ static bool shift_apply(emu *e, u32 ins, u32 sh, u32 *v, bool imm) {
             return is_negative(w);
         }
     case SHIFT_ROR:
-        debug("ror, shift = %d", sh);
         if (imm && sh == 0) { // rrx
             *v = (w >> 1 | e->cpsr.c << 31);
             return w & 0b1;
@@ -147,160 +279,14 @@ static bool shift_apply(emu *e, u32 ins, u32 sh, u32 *v, bool imm) {
     return false;
 }
 
-// memory access
-static inline void mem_record_transaction(emu *e, transaction t) {
-    if (!e->trans.record) return;
-    if (e->trans.idx >= 8) {
-        panic("too many transactions");
-    } else {
-        debug("transaction %d: addr = 0x%08x, val = 0x%08x", e->trans.idx, t.addr, t.val);
-        e->trans.data[e->trans.idx] = t;
-        e->trans.idx++;
-    }
-}
-static inline u32 mem_lookup_load(emu *e, u32 size, u32 addr) {
-    for (ptrdiff_t i = 0; i < 8; ++i) {
-        debug("valid = %d, size = %d, addr = 0x%08x", e->trans.loads[i].valid, e->trans.loads[i].size, e->trans.loads[i].addr);
-        if (e->trans.loads[i].valid
-            && e->trans.loads[i].size == size
-            && e->trans.loads[i].addr == addr) {
-            return e->trans.loads[i].data;
-        }
-    }
-    return 0xbeefbabe;
-}
-u8 *mem_loc(emu *e, u32 addr) {
-    if (addr >= 0x02000000 && addr <= 0x0203FFFF) {
-        return &e->mem.ewram[addr - 0x02000000];
-    } else if (addr >= 0x03000000 && addr <= 0x03007FFF) {
-        return &e->mem.iwram[addr - 0x03000000];
-    } else if (addr >= 0x08000000 && addr <= 0x09FFFFFF) {
-        return &e->mem.rom[addr - 0x08000000];
-    }
-    return NULL;
-}
-static inline u32 mem_read_byte(emu *e, u32 addr) {
-    u8 *loc = mem_loc(e, addr);
-    if (loc) return *loc;
-    else {
-        // panic("invalid read address: 0x%08xu", addr);
-        return 0xee;
-    }
-}
-static inline u32 mem_read8(emu *e, u32 addr) {
-    if (e->trans.record) return mem_lookup_load(e, 1, addr);
-    u32 res = mem_read_byte(e, addr);
-    mem_record_transaction(e, (transaction){
-        .kind = TRANS_READ,
-        .size = 1,
-        .addr = addr,
-        .val = res,
-    });
-    return res;
-}
-static inline u32 mem_read16(emu *e, u32 addr) {
-    u32 misalign = addr & 0b11; // align word operations, and rotate misaligned loads
-    u32 rot = misalign << 3; // misalign represents the misalignment in bytes - convert to bits
-    if (e->trans.record) return ror(mem_lookup_load(e, 2, addr), rot);
-    addr &= 0b11111111111111111111111111111110;
-    u32 res = mem_read_byte(e, addr)
-        | mem_read_byte(e, addr + 1) << 8;
-    mem_record_transaction(e, (transaction){
-        .kind = TRANS_READ,
-        .size = 2,
-        .addr = addr,
-        .val = res,
-    });
-    return ror(res, rot);
-}
-static inline u32 mem_read32(emu *e, u32 addr) {
-    u32 misalign = addr & 0b11; // align word operations, and rotate misaligned loads
-    u32 rot = misalign << 3; // misalign represents the misalignment in bytes - convert to bits
-    if (e->trans.record) return ror(mem_lookup_load(e, 4, addr), rot);
-    addr &= 0b11111111111111111111111111111100;
-    u32 res = mem_read_byte(e, addr)
-        | mem_read_byte(e, addr + 1) << 8
-        | mem_read_byte(e, addr + 2) << 16
-        | mem_read_byte(e, addr + 3) << 24;
-    mem_record_transaction(e, (transaction){
-        .kind = TRANS_READ,
-        .size = 4,
-        .addr = addr,
-        .val = res,
-    });
-    return ror(res, rot);
-}
-static inline void mem_write_byte(emu *e, u32 addr, u8 val) {
-    u8 *loc = mem_loc(e, addr);
-    if (loc) *loc = val;
-    // else panic("invalid write address: 0x%08xu", addr);
-}
-static inline void mem_write8(emu *e, u32 addr, u8 val) {
-    mem_record_transaction(e, (transaction){
-        .kind = TRANS_WRITE,
-        .size = 1,
-        .addr = addr,
-        .val = val,
-    });
-    mem_write_byte(e, addr, val);
-}
-static inline void mem_write16(emu *e, u32 addr, u16 val) {
-    mem_record_transaction(e, (transaction){
-        .kind = TRANS_WRITE,
-        .size = 2,
-        .addr = addr,
-        .val = val,
-    });
-    mem_write_byte(e, addr, val & 0xff);
-    mem_write_byte(e, addr + 1, val >> 8 & 0xff);
-}
-static inline void mem_write32(emu *e, u32 addr, u32 val) {
-    mem_record_transaction(e, (transaction){
-        .kind = TRANS_WRITE,
-        .size = 4,
-        .addr = addr,
-        .val = val,
-    });
-    mem_write_byte(e, addr, val & 0xff);
-    mem_write_byte(e, addr + 1, val >> 8 & 0xff);
-    mem_write_byte(e, addr + 2, val >> 16 & 0xff);
-    mem_write_byte(e, addr + 3, val >> 24 & 0xff);
-}
-
-// instruction decoding helpers
-static inline cond a_cond(u32 ins) { return ins >> 28 & 0xf; }
-static inline dpop a_op(u32 ins) { return ins >> 21 & 0xf; }
-static inline reg a_rn(u32 ins) { return ins >> 16 & 0xf; }
-static inline reg a_rd(u32 ins) { return ins >> 12 & 0xf; }
-static inline reg a_rs(u32 ins) { return ins >> 8 & 0xf; }
-static inline reg a_rm(u32 ins) { return ins & 0xf; }
-static inline u32 a_disc3(u32 ins) { return ins >> 25 & 0b111; }
-static inline u32 a_disc4(u32 ins) { return ins >> 24 & 0b1111; }
-static inline u32 a_disc5(u32 ins) { return ins >> 23 & 0b11111; }
-static inline u32 a_disc6(u32 ins) { return ins >> 22 & 0b111111; }
-static inline u32 a_disc8(u32 ins) { return ins >> 20 & 0xff; }
-static inline u32 a_disclo(u32 ins) { return ins >> 20 & 0b11; }
-static inline u32 a_immhi(u32 ins) { return ins >> 4 & 0xf; }
-
-// emulation
-static inline void a_dataprocessing(emu *e, u32 ins, u32 op2, u32 shiftc, bool regop) {
-    bool s = flag(ins, 20);
-    reg rd = a_rd(ins);
-    reg rn = a_rn(ins);
+static inline void dataprocessing(emu *e, bool s, reg rd, reg rn, u32 opcode, u32 op2, u32 shiftc, bool regop) {
     u32 op1 = r(e, rn);
     if (regop && rn == PC) op1 += 4; // PC reads as 4 higher if we're shifting a register
-    u32 opcode = a_op(ins);
     u32 res = 0;
     bool n = e->cpsr.n, z = e->cpsr.z, c = e->cpsr.c, v = e->cpsr.v;
     switch (opcode) {
-    case DPOP_AND: case DPOP_TST:
-        res = op1 & op2;
-        c = shiftc;
-        break;
-    case DPOP_EOR: case DPOP_TEQ:
-        res = op1 ^ op2;
-        c = shiftc;
-        break;
+    case DPOP_AND: case DPOP_TST: res = op1 & op2; c = shiftc; break;
+    case DPOP_EOR: case DPOP_TEQ: res = op1 ^ op2; c = shiftc; break;
     case DPOP_SUB: case DPOP_CMP:
         res = op1 - op2;
         c = !is_carry((u64) op1 - (u64) op2);
@@ -331,30 +317,14 @@ static inline void a_dataprocessing(emu *e, u32 ins, u32 op2, u32 shiftc, bool r
         c = !is_carry((u64) op2 - (u64) op1 + (u64) e->cpsr.c - (u64) 1);
         v = is_overflow_sub(op2, op1, res);
         break;
-    case DPOP_ORR:
-        res = op1 | op2;
-        c = shiftc;
-        break;
-    case DPOP_MOV:
-        res = op2;
-        c = shiftc;
-        break;
-    case DPOP_BIC:
-        res = op1 & ~op2;
-        c = shiftc;
-        break;
-    case DPOP_MVN:
-        res = ~op2;
-        c = shiftc;
-        break;
+    case DPOP_ORR: res = op1 | op2; c = shiftc; break;
+    case DPOP_MOV: res = op2; c = shiftc; break;
+    case DPOP_BIC: res = op1 & ~op2; c = shiftc; break;
+    case DPOP_MVN: res = ~op2; c = shiftc; break;
     }
-    n = is_negative(res);
-    z = res == 0;
+    n = is_negative(res); z = res == 0;
     bool cmpop = opcode >> 2 == 0b10; // if TST, TEQ, CMP, CMN
-    if (!cmpop) {
-        sr(e, rd, res);
-        if (rd == PC) e->branched = true;
-    }
+    if (!cmpop) { sr(e, rd, res); if (rd == PC) e->branched = true; }
     if (s) {
         if (rd == PC) {
             switch (e->cpsr.mode) {
@@ -363,29 +333,19 @@ static inline void a_dataprocessing(emu *e, u32 ins, u32 op2, u32 shiftc, bool r
             case MODE_SVC: e->cpsr = e->spsr_svc; break;
             case MODE_ABT: e->cpsr = e->spsr_abt; break;
             case MODE_UND: e->cpsr = e->spsr_und; break;
-            default:
-                e->cpsr.n = n; e->cpsr.z = z; e->cpsr.c = c; e->cpsr.v = v;
-                break;
+            default: e->cpsr.n = n; e->cpsr.z = z; e->cpsr.c = c; e->cpsr.v = v; break;
             }
         } else {
             e->cpsr.n = n; e->cpsr.z = z; e->cpsr.c = c; e->cpsr.v = v;
         }
     }
 }
-static inline void a_loadstore(emu *e, u32 ins, u32 off) {
-    bool p = flag(ins, 24);
-    bool u = flag(ins, 23);
-    bool b = flag(ins, 22);
-    bool w = flag(ins, 21);
-    bool l = flag(ins, 20);
-    reg rn = a_rn(ins);
-    reg rd = a_rd(ins);
+static inline void memop(emu *e, bool p, bool u, bool b, bool w, bool l, reg rn, reg rd, u32 off) {
+    u32 val = r(e, rd); if (rd == PC) val += 4;
     u32 addrpre = r(e, rn);
-    debug("loadstone: addrpre = 0x%08x, off = 0x%08x", addrpre, off);
     u32 addrpost = u ? addrpre + off : addrpre - off;
     u32 addr = p ? addrpost : addrpre;
     if (!p || w) {
-        debug("writeback addrpost = 0x%08x", addrpost);
         u32 pcoff = rn == PC ? 4 : 0;
         sr(e, rn, addrpost + pcoff);
         if (rn == PC) e->branched = true;
@@ -395,40 +355,35 @@ static inline void a_loadstore(emu *e, u32 ins, u32 off) {
         else sr(e, rd, mem_read32(e, addr));
         if (rd == PC) e->branched = true;
     } else {
-        if (b) mem_write8(e, addr, r(e, rd));
-        else mem_write32(e, addr, r(e, rd));
+        if (b) mem_write8(e, addr, val);
+        else mem_write32(e, addr, val);
     }
 }
-static inline void a_loadstorehalfword(emu *e, u32 ins, u32 off) {
-    bool p = flag(ins, 24);
-    bool u = flag(ins, 23);
-    bool w = flag(ins, 21);
-    bool l = flag(ins, 20);
-    bool s = flag(ins, 6);
-    bool h = flag(ins, 5);
-    reg rn = a_rn(ins);
-    reg rd = a_rd(ins);
+static inline void memophalf(emu *e, bool p, bool u, bool w, bool l, bool s, bool h, reg rn, reg rd, u32 off) {
+    u32 val = r(e, rd); if (rd == PC) val += 4;
     u32 addrpre = r(e, rn);
     u32 addrpost = u ? addrpre + off : addrpre - off;
     u32 addr = p ? addrpost : addrpre;
     if (!p || w) {
-        sr(e, rn, addrpost);
+        u32 pcoff = rn == PC ? 4 : 0;
+        sr(e, rn, addrpost + pcoff);
         if (rn == PC) e->branched = true;
     }
     if (l) {
         if (h) {
-            u16 v = mem_read16(e, addr);
-            sr(e, rd, s ? sext(v) : v);
-        } else sr(e, rd, sext(mem_read8(e, addr)));
+            u32 v = mem_read16(e, addr);
+            if (s) { if (addr & 0b1) v = sext8(v); else v = sext16(v); }
+            sr(e, rd, v);
+        } else sr(e, rd, sext8(mem_read8(e, addr)));
         if (rd == PC) e->branched = true;
-    } else if (h) mem_write16(e, addr, r(e, rd));
-    else mem_write8(e, addr, r(e, rd));
+    } else if (h) mem_write16(e, addr, val);
+    else mem_write8(e, addr, val);
 }
 
 bool emulate_arm_ins(emu *e, u32 ins) {
     // in ARM, the PC points to the instruction after the next instruction to execute
     // this is "Fucked Up" but we'll deal with it
-    // see: https://stackoverflow.com/questions/24091566/why-does-the-arm-pc-register-point-to-the-instruction-after-the-next-one-to-be-e
+    // see: https://stackoverflow.com/questions/24091566
     e->branched = false;
     cond cond = a_cond(ins);
     if (!cond_satisfied(e, cond)) goto end;
@@ -440,13 +395,11 @@ bool emulate_arm_ins(emu *e, u32 ins) {
         if (thumb) {
             e->cpsr.t = 1;
             addr &= 0b11111111111111111111111111111110;
-            e->branched = true;
-            sr(e, PC, addr);
+            sr(e, PC, addr); e->branched = true;
         } else {
             e->cpsr.t = 0;
             addr &= 0b11111111111111111111111111111110;
-            e->branched = true;
-            sr(e, PC, addr);
+            sr(e, PC, addr); e->branched = true;
         }
     } else if (a_disc6(ins) == 0b000000 && a_immhi(ins) == 0b1001) {
         // multiply
@@ -484,7 +437,7 @@ bool emulate_arm_ins(emu *e, u32 ins) {
             mem_write8(e, addr, rval);
             sr(e, rd, mval);
         }
-    } else if (a_disc5(ins) == 0b00010 && a_disclo(ins) == 0b00) {
+    } else if (a_disc5(ins) == 0b00010 && a_disclo(ins) == 0b00 && a_discmrs(ins) == 0) {
         panic("move from status register");
         return false;
     } else if (a_disc5(ins) == 0b00110 && a_disclo(ins) == 0b10) {
@@ -507,40 +460,66 @@ bool emulate_arm_ins(emu *e, u32 ins) {
         u32 hi = ins >> 8 & 0xf;
         u32 lo = ins & 0xf;
         u32 off = hi << 4 | lo;
-        a_loadstorehalfword(e, ins, off);
+        memophalf(e,
+            flag(ins, 24), flag(ins, 23), flag(ins, 21), flag(ins, 20), flag(ins, 6), flag(ins, 5),
+            a_rn(ins), a_rd(ins),
+            off
+        );
     } else if (a_disc3(ins) == 0b000 && flag(ins, 22) == 0 && flag(ins, 7) == 1 && flag(ins, 4) == 1) {
         // load/store 16-bit, offset in register
         u32 off = r(e, a_rm(ins));
-        a_loadstorehalfword(e, ins, off);
+        memophalf(e,
+            flag(ins, 24), flag(ins, 23), flag(ins, 21), flag(ins, 20), flag(ins, 6), flag(ins, 5),
+            a_rn(ins), a_rd(ins),
+            off
+        );
     } else if (a_disc3(ins) == 0b001) {
         // data processing, op2 is rotated immediate
         u32 imm = ins & 0xff;
         u32 rot = (ins >> 8 & 0xf) << 1;
         u32 v = ror(imm, rot);
-        bool shiftc = rot == 0 ? e->cpsr.c : imm >> (rot - 1) & 0b1;
-        a_dataprocessing(e, ins, v, shiftc, false);
+        dataprocessing(e,
+            flag(ins, 20), a_rd(ins), a_rn(ins), a_op(ins), v,
+            rot == 0 ? e->cpsr.c : imm >> (rot - 1) & 0b1,
+            false
+        );
     } else if (a_disc3(ins) == 0b000 && flag(ins, 4) == 0) {
         // data processing, op2 is register shifted by immediate
         reg reg = a_rm(ins);
         u32 v = r(e, reg);
-        a_dataprocessing(e, ins, v, shift_apply(e, ins, ins >> 7 & 0b11111, &v, true), false);
+        dataprocessing(e,
+            flag(ins, 20), a_rd(ins), a_rn(ins), a_op(ins), v,
+            shifter(e, ins >> 5 & 0b11, ins >> 7 & 0b11111, &v, true),
+            false
+        );
     } else if (a_disc3(ins) == 0b000 && flag(ins, 4) == 1) {
         // data processing, op2 is register shifted by register
         reg rm = a_rm(ins);
         u32 v = r(e, rm);
         if (rm == PC) v += 4; // PC reads as 4 higher if we're shifting a register
         u32 sh = r(e, a_rs(ins)) & 0xff;
-        a_dataprocessing(e, ins, v, shift_apply(e, ins, sh, &v, false), true);
+        dataprocessing(e,
+            flag(ins, 20), a_rd(ins), a_rn(ins), a_op(ins), v,
+            shifter(e, ins >> 5 & 0b11, sh, &v, false),
+            true
+        );
     } else if (a_disc3(ins) == 0b010) {
         // load/store, offset in immediate
         u32 imm = ins & 0xfff;
-        a_loadstore(e, ins, imm);
+        memop(e,
+            flag(ins, 24), flag(ins, 23), flag(ins, 22), flag(ins, 21), flag(ins, 20),
+            a_rn(ins), a_rd(ins),
+            imm
+        );
     } else if (a_disc3(ins) == 0b011 && flag(ins, 4) == 0) {
         // load/store, offset in register shifted by immediate
         u32 v = r(e, a_rm(ins));
-        debug("register is %d", a_rm(ins));
-        (void) shift_apply(e, ins, ins >> 7 & 0b11111, &v, true);
-        a_loadstore(e, ins, v);
+        (void) shifter(e, ins >> 5 & 0b11, ins >> 7 & 0b11111, &v, true);
+        memop(e,
+            flag(ins, 24), flag(ins, 23), flag(ins, 22), flag(ins, 21), flag(ins, 20),
+            a_rn(ins), a_rd(ins),
+            v
+        );
     } else if (a_disc3(ins) == 0b100) {
         // load/store multiple registers
         bool p = flag(ins, 24);
@@ -569,8 +548,7 @@ bool emulate_arm_ins(emu *e, u32 ins) {
         u32 uoff = ins & 0xffffff;
         u32 soff = ((s32) (uoff << 8)) >> 8; // sign-extend from 24-bits to 32-bits
         soff <<= 2;
-        e->branched = true;
-        sr(e, PC, r(e, PC) + soff);
+        sr(e, PC, r(e, PC) + soff); e->branched = true;
     } else if (a_disc3(ins) == 0b011 && flag(ins, 4) == 1) {
         // undefined instructions
         debug("undefined");
@@ -610,7 +588,7 @@ static inline void t_loadstore(emu *e, u32 ins, u32 off, bool b) {
     else if (b) mem_write8(e, addr, r(e, rd)); else mem_write32(e, addr, r(e, rd));
 }
 
-static inline void t_loadstorehalfword(emu *e, u32 ins, u32 off, bool h) {
+static inline void t_loadstorehalf(emu *e, u32 ins, u32 off, bool h) {
     bool l = flag(ins, 11);
     reg rn = t_rn(ins);
     reg rd = t_rd(ins);
@@ -618,7 +596,7 @@ static inline void t_loadstorehalfword(emu *e, u32 ins, u32 off, bool h) {
     addr += off;
     if (l) {
         if (h) sr(e, rd, mem_read16(e, addr));
-        else sr(e, rd, sext(mem_read8(e, addr)));
+        else sr(e, rd, sext8(mem_read8(e, addr)));
     } else mem_write16(e, addr, r(e, rd));
 }
 
@@ -793,13 +771,13 @@ bool emulate_thumb_ins(emu *e, u16 ins) {
         u32 off = r(e, t_rm(ins));
         t_loadstore(e, ins, off, flag(ins, 10));
     } else if (a_disc4(ins) == 0b0101 && flag(ins, 9) == 1) {
-        // load/store halfword register
+        // load/store half register
         u32 off = r(e, t_rm(ins));
-        t_loadstorehalfword(e, ins, off, flag(ins, 11));
+        t_loadstorehalf(e, ins, off, flag(ins, 11));
     } else if (a_disc4(ins) == 0b1000) {
-        // load/store halfword immediate
+        // load/store half immediate
         u32 off = ins >> 6 & 0b11111;
-        t_loadstorehalfword(e, ins, off, false);
+        t_loadstorehalf(e, ins, off, false);
     } else if (a_disc4(ins) == 0b1001) {
         // load/store to/from stack offset
         bool l = flag(ins, 11);

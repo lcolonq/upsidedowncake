@@ -30,8 +30,8 @@
 (defun test/build-loads (ts)
   "Construct a vector of load vector from TS."
   (seq-mapcat
-    (lambda (t)
-      (-let [(&hash "kind" "size" "addr" "data") t]
+    (lambda (tr)
+      (-let [(&hash "kind" "size" "addr" "data") tr]
         (when (= kind 1)
           (list (vector addr data size)))))
     ts
@@ -92,6 +92,26 @@
         (test/compare-cpsr "SPSR_ABT" SPSR_abt (seq-elt aSPSR 3))
         (test/compare-cpsr "SPSR_UND" SPSR_und (seq-elt aSPSR 4)))
       (error (error "While checking instruction:\n%s\n%s" disasm (cadr err))))))
+(defun test/compare-transaction (idx expected actual)
+  "Compare EXPECTED with ACTUAL at IDX."
+  (-let ( ((&hash "kind" "size" "addr" "data") expected)
+          ([akind aaddr asize adata] actual))
+    (condition-case err
+      (progn
+        (test/compare-field "Kind" kind akind)
+        (test/compare-field "Address" addr aaddr)
+        (test/compare-field "Size" size asize)
+        (test/compare-field "Data" data adata))
+      (error (error "While comparing transaction %s:\n%s" idx (cadr err))))))
+(defun test/compare-transactions (disasm expected actual)
+  "Compare EXPECTED transactions with ACTUAL for DISASM."
+  (-let ( (es (--filter (not (= 0 (ht-get it "kind"))) (seq-into expected 'list)))
+          (as (seq-into actual 'list)))
+    (condition-case err
+      (progn
+        (--each-indexed (-zip-pair es as)
+          (test/compare-transaction it-index (car it) (cdr it))))
+      (error (error "While checking transactions for instruction:\n%s\n%s" disasm (cadr err))))))
   
 (defun test/to-binary (x)
   "Convert X to a binary string."
@@ -136,14 +156,17 @@
            (initstr (test/pretty-state state))
            (expectstr (test/pretty-state (test/build-state opcode final)))
            (loads (test/build-loads transactions))
-           ((disasm . trans) (u/gba/c-emulate-test-arm state loads)))
+           ((disasm . trans) (u/gba/c-emulate-test-arm state loads))
+           (insnm (format "%s (%s)" disasm (test/to-binary opcode))))
     (condition-case err
-      (test/compare-state (format "%s (%s)" disasm (test/to-binary opcode)) state final)
+      (progn
+        (test/compare-state insnm state final)
+        (test/compare-transactions insnm transactions trans))
       (error
         (error
-          "%s\nInitial: %s\nActual:  %s\nExpect:  %s\n\nExpected Transactions: %s\n"
+          "%s\nInitial: %s\nActual:  %s\nExpect:  %s\n\nExpected Transactions:\n%s"
           (cadr err) initstr (test/pretty-state state) expectstr
-          transactions
+          (test/pretty-transactions transactions)
           )))
     (message "%s passed" (s-pad-right 40 " " disasm))
     ))
@@ -155,17 +178,17 @@
     cs))
 (defconst test/files
   '(
-     ;; "arm_data_proc_immediate"
-     ;; "arm_data_proc_immediate_shift"
-     ;; "arm_data_proc_register_shift"
-     ;; "arm_mul_mla"
-     ;; "arm_bx"
-     ;; "arm_b_bl"
-     ;; "arm_ldr_str_immediate_offset"
-     ;; "arm_ldr_str_register_offset"
-     "arm_ldrh_strh"
-     ;; "arm_ldrsb_strsh"
-     ;; "arm_ldm_stm"
+     ;;"arm_data_proc_immediate"
+     ;;"arm_data_proc_immediate_shift"
+     ;;"arm_data_proc_register_shift"
+     ;;"arm_mul_mla"
+     ;;"arm_bx"
+     ;;"arm_b_bl"
+     ;;"arm_ldr_str_immediate_offset"
+     ;;"arm_ldr_str_register_offset"
+     ;;"arm_ldrh_strh"
+     ;;"arm_ldrsb_ldrsh"
+     "arm_ldm_stm"
      ;; "arm_swp"
      ))
 (--each test/files
