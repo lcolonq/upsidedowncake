@@ -82,21 +82,22 @@ static inline void mem_record_transaction(emu *e, transaction t) {
     if (e->trans.idx >= TRANS_MAX) {
         panic("too many transactions");
     } else {
-        debug("transaction %d: addr = 0x%08x, val = 0x%08x", e->trans.idx, t.addr, t.data);
+        // debug("transaction %d: addr = 0x%08x, val = 0x%08x", e->trans.idx, t.addr, t.data);
         e->trans.data[e->trans.idx] = t;
         e->trans.idx++;
     }
 }
 static inline u32 mem_lookup_load(emu *e, u32 size, u32 addr) {
     for (ptrdiff_t i = 0; i < TRANS_MAX; ++i) {
-        debug("valid = %d, size = %d, addr = 0x%08x", e->trans.loads[i].valid, e->trans.loads[i].size, e->trans.loads[i].addr);
+        // debug("valid = %d, size = %d, addr = 0x%08x", e->trans.loads[i].valid, e->trans.loads[i].size, e->trans.loads[i].addr);
         if (e->trans.loads[i].valid
             && e->trans.loads[i].size == size
             && e->trans.loads[i].addr == addr) {
-            debug("found; data = 0x%08x", e->trans.loads[i].data);
+            // debug("found; data = 0x%08x", e->trans.loads[i].data);
             return e->trans.loads[i].data;
         }
     }
+    debug("read from invalid load address: 0x%08x", addr);
     return 0xbeefbabe;
 }
 u8 *mem_loc(emu *e, u32 addr) {
@@ -147,10 +148,8 @@ static inline u32 mem_read16(emu *e, u32 addr) {
     });
     return ror(res, rot);
 }
-static inline u32 mem_read32(emu *e, u32 addr) {
-    u32 misalign = addr & 0b11; // align word operations, and rotate misaligned loads
-    u32 rot = misalign << 3; // misalign represents the misalignment in bytes - convert to bits
-    if (e->trans.record) return ror(mem_lookup_load(e, 4, addr), rot);
+static inline u32 mem_read32_raw(emu *e, u32 addr) {
+    if (e->trans.record) return mem_lookup_load(e, 4, addr);
     addr &= 0b11111111111111111111111111111100;
     u32 res = mem_read_byte(e, addr)
         | mem_read_byte(e, addr + 1) << 8
@@ -162,7 +161,12 @@ static inline u32 mem_read32(emu *e, u32 addr) {
         .addr = addr,
         .data = res,
     });
-    return ror(res, rot);
+    return res;
+}
+static inline u32 mem_read32(emu *e, u32 addr) {
+    u32 misalign = addr & 0b11; // align word operations, and rotate misaligned loads
+    u32 rot = misalign << 3; // misalign represents the misalignment in bytes - convert to bits
+    return ror(mem_read32_raw(e, addr), rot);
 }
 static inline void mem_write_byte(emu *e, u32 addr, u8 val) {
     u8 *loc = mem_loc(e, addr);
@@ -520,24 +524,113 @@ bool emulate_arm_ins(emu *e, u32 ins) {
             a_rn(ins), a_rd(ins),
             v
         );
+    } else if (a_disc3(ins) == 0b100 && (ins & 0xffff) == 0) {
+        bool p = flag(ins, 24);
+        bool u = flag(ins, 23);
+        bool s = flag(ins, 22);
+        bool w = flag(ins, 21);
+        bool l = flag(ins, 20);
+        reg rn = a_rn(ins);
+        u32 addr = r(e, rn);
+        u32 addrstart = addr;
+        bool loading_pc = l;
+        ptrdiff_t regcount = 16;
+        u32 addrfinal = u ? addr + regcount * 4 : addr - regcount * 4;
+        if (!u) addrstart -= regcount * 4;
+        if (p == u) addrstart += 4;
+        mode m = e->cpsr.mode;
+        if (s && !loading_pc) e->cpsr.mode = MODE_USR;
+        if (l && w) {
+            sr(e, rn, addrfinal);
+            if (rn == PC) e->branched = true;
+        }
+        if (l) sr(e, PC, mem_read32_raw(e, addrstart));
+        else {
+            u32 val = r(e, PC);
+            if (!(rn == PC && w)) val += 4;
+            mem_write32(e, addrstart, val);
+        }
+        if (!l && w) {
+            sr(e, rn, addrfinal);
+            if (rn == PC) e->branched = true;
+        }
+        e->cpsr.mode = m;
+        if (loading_pc) {
+            e->branched = true;
+            if (s) {
+                switch (e->cpsr.mode) {
+                case MODE_FIQ: e->cpsr = e->spsr_fiq; break;
+                case MODE_IRQ: e->cpsr = e->spsr_irq; break;
+                case MODE_SVC: e->cpsr = e->spsr_svc; break;
+                case MODE_ABT: e->cpsr = e->spsr_abt; break;
+                case MODE_UND: e->cpsr = e->spsr_und; break;
+                default: break;
+                }
+            }
+        }
     } else if (a_disc3(ins) == 0b100) {
         // load/store multiple registers
         bool p = flag(ins, 24);
         bool u = flag(ins, 23);
+        bool s = flag(ins, 22);
         bool w = flag(ins, 21);
         bool l = flag(ins, 20);
+        debug("s: %d", s);
         u32 reglist = ins & 0xffff;
         reg rn = a_rn(ins);
         u32 addr = r(e, rn);
+        u32 addrstart = addr;
+        bool loading_pc = l && reglist >> PC & 0b1;
+        ptrdiff_t regcount = 0;
+        for (ptrdiff_t i = 0; i < 16; ++i) if (reglist >> i & 0b1) regcount += 1;
+        u32 addrfinal = u ? addr + regcount * 4 : addr - regcount * 4;
+        if (!u) addrstart -= regcount * 4;
+        if (p == u) addrstart += 4;
+        mode m = e->cpsr.mode;
+        if (s && !loading_pc) e->cpsr.mode = MODE_USR;
+        if (l && w) {
+            sr(e, rn, addrfinal);
+            if (rn == PC) e->branched = true;
+        }
+        u32 a = addrstart;
+        bool wroteback = false;
+        ptrdiff_t opcount = 0;
         for (ptrdiff_t i = 0; i < 16; ++i) {
             if (reglist >> i & 0b1) {
-                if (p) { if (u) addr += 4; else addr -= 4; }
-                if (l) sr(e, i, mem_read32(e, addr));
-                else mem_write32(e, addr, r(e, i));
-                if (!p) { if (u) addr += 4; else addr -= 4; }
+                if (l) sr(e, i, mem_read32_raw(e, a));
+                else {
+                    u32 val = r(e, i);
+                    if (i == PC && !(rn == PC && w)) {
+                        debug("hiiii");
+                        val += 4;
+                    }
+                    mem_write32(e, a, val);
+                }
+                a += 4;
+                opcount += 1;
+            }
+            if ((opcount == 1 || i == 15) && !l && !wroteback) {
+                wroteback = true;
+                if (w) {
+                    sr(e, rn, addrfinal);
+                    if (rn == PC) e->branched = true;
+                }
             }
         }
-        if (w) sr(e, rn, addr);
+        e->cpsr.mode = m;
+        if (loading_pc) {
+            e->branched = true;
+            if (s) {
+                switch (e->cpsr.mode) {
+                case MODE_FIQ: e->cpsr = e->spsr_fiq; break;
+                case MODE_IRQ: e->cpsr = e->spsr_irq; break;
+                case MODE_SVC: e->cpsr = e->spsr_svc; break;
+                case MODE_ABT: e->cpsr = e->spsr_abt; break;
+                case MODE_UND: e->cpsr = e->spsr_und; break;
+                default: break;
+                }
+            }
+        }
     } else if (a_disc3(ins) == 0b110) {
         panic("coprocessor load and store");
         return false;

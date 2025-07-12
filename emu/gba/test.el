@@ -148,6 +148,16 @@
       (format " SPSR_ABT=0x%08x" (seq-elt aSPSR 3))
       (format " SPSR_UND=0x%08x" (seq-elt aSPSR 4))
       (format " | mode=%s" (test/pretty-mode (logand aCPSR #b11111))))))
+(defun test/pretty-transaction (t)
+  "Pretty-print T."
+  (-let* ( ((&hash "kind" "size" "addr" "data") t)
+           (skind (cl-case kind (0 "Instruction read") (1 "Read") (2 "Write") (t "Unknown")))
+           (saddr (format "0x%08x" addr))
+           (sdata (format "0x%08x" data)))
+    (format "- %s (size %s) at %s: %s" skind size saddr sdata)))
+(defun test/pretty-transactions (ts)
+  "Pretty-print TS."
+  (s-join "\n" (-map #'test/pretty-transaction ts)))
 
 (defun test/case (c)
   "Test the emulator on C."
@@ -184,10 +194,10 @@
      ;;"arm_mul_mla"
      ;;"arm_bx"
      ;;"arm_b_bl"
-     ;;"arm_ldr_str_immediate_offset"
-     ;;"arm_ldr_str_register_offset"
-     ;;"arm_ldrh_strh"
-     ;;"arm_ldrsb_ldrsh"
+     ;; "arm_ldr_str_immediate_offset"
+     ;; "arm_ldr_str_register_offset"
+     ;; "arm_ldrh_strh"
+     ;; "arm_ldrsb_ldrsh"
      "arm_ldm_stm"
      ;; "arm_swp"
      ))
