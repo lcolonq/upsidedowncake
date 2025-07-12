@@ -2,8 +2,8 @@ SRCS = src/main.c src/utils.c src/arm.c
 OBJECTS = $(SRCS:src/%.c=build/%.o)
 
 CHK_SOURCES ?= $(SRCS)
-CPPFLAGS ?= -Ideps/ -Isrc/ -MMD -MP
-CFLAGS ?= -Wall -Wextra -Wpedantic -ftrapv --std=c23 -g -fPIC
+CPPFLAGS ?= -MMD -MP
+CFLAGS ?= -Ideps/ -Isrc/ -Wall -Wextra -Wpedantic -ftrapv --std=c23 -g -fPIC
 LDFLAGS ?= -lcapstone -shared -g
 
 .PHONY: all clean test check-syntax
@@ -33,6 +33,6 @@ TAGS: $(SRCS)
 	etags $^
 
 check-syntax: TAGS
-	gcc $(CPPFLAGS) $(CFLAGS) -fsyntax-only $(CHK_SOURCES)
+	gcc $(CFLAGS) -fsyntax-only $(CHK_SOURCES)
 
 -include $(OBJECTS:.o=.d)
